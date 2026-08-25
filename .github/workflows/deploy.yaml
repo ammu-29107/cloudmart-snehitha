@@ -12,8 +12,8 @@ permissions:
   contents: read
 
 env:
-  AWS_REGION: ${{ vars.AWS_REGION }}
-  EXEC_ROLE: ${{ vars.CFN_EXEC_ROLE_ARN }}
+  AWS_REGION: ${{ vars.AWS_ROLE_ARN }}  
+  
 
 jobs:
   deploy-network:
