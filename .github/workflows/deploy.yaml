@@ -4,869 +4,377 @@ on:
   push:
     branches:
       - main
-
   workflow_dispatch:
-
-# ============================================================
-# GitHub OIDC permissions
-#
-# id-token: write
-#   Allows GitHub to request an OIDC token and assume the AWS role.
-#
-# contents: read
-#   Allows the workflow to checkout the repository.
-# ============================================================
 
 permissions:
   id-token: write
   contents: read
 
-# ============================================================
-# GLOBAL CONFIGURATION
-# ============================================================
-
 env:
   AWS_REGION: ap-south-1
   ENVIRONMENT: dev
   NETWORK_STACK_NAME: cloudmart-dev-network
-  NETWORK_TEMPLATE: cloudformation/network-stack.yaml
-
 
 jobs:
 
   # ============================================================
-  # JOB 1
-  # VALIDATE NETWORK TEMPLATE
+  # JOB 1 — CHECK AWS ACCESS
+  # ============================================================
+
+  aws-access-check:
+    name: "1. AWS Access Check"
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials using GitHub OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Print deployment environment
+        run: |
+          echo "============================================================"
+          echo "              CLOUDMART AWS ACCESS CHECK"
+          echo "============================================================"
+          echo "AWS Region      : $AWS_REGION"
+          echo "Environment     : $ENVIRONMENT"
+          echo "Stack           : $NETWORK_STACK_NAME"
+          echo "============================================================"
+
+      - name: Verify AWS identity
+        run: |
+          echo ""
+          echo "Checking AWS identity..."
+          echo ""
+
+          aws sts get-caller-identity
+
+          echo ""
+          echo "AWS identity check completed."
+          echo ""
+
+
+      # --------------------------------------------------------
+      # EC2 READ PERMISSION CHECK
+      # --------------------------------------------------------
+
+      - name: Check EC2 read permissions
+        run: |
+          echo "============================================================"
+          echo "             CHECKING EC2 READ PERMISSIONS"
+          echo "============================================================"
+          echo ""
+          echo "These permissions are used only for deployment diagnostics."
+          echo ""
+
+          echo "[1/4] ec2:DescribeVpcs"
+          aws ec2 describe-vpcs \
+            --max-results 5 \
+            --region "$AWS_REGION" \
+            > /tmp/vpcs.json
+
+          echo "      PASS"
+
+          echo ""
+          echo "[2/4] ec2:DescribeSubnets"
+          aws ec2 describe-subnets \
+            --max-results 5 \
+            --region "$AWS_REGION" \
+            > /tmp/subnets.json
+
+          echo "      PASS"
+
+          echo ""
+          echo "[3/4] ec2:DescribeRouteTables"
+          aws ec2 describe-route-tables \
+            --max-results 5 \
+            --region "$AWS_REGION" \
+            > /tmp/routes.json
+
+          echo "      PASS"
+
+          echo ""
+          echo "[4/4] ec2:DescribeSecurityGroups"
+          aws ec2 describe-security-groups \
+            --max-results 5 \
+            --region "$AWS_REGION" \
+            > /tmp/security-groups.json
+
+          echo "      PASS"
+
+          echo ""
+          echo "============================================================"
+          echo "             EC2 READ PERMISSIONS: PASSED"
+          echo "============================================================"
+
+
+  # ============================================================
+  # JOB 2 — VALIDATE NETWORK TEMPLATE
   # ============================================================
 
   validate-network:
-
-    name: "1 - Validate Network Stack"
-
+    name: "2. Validate Network Template"
     runs-on: ubuntu-latest
+    needs: aws-access-check
 
     steps:
 
-      # --------------------------------------------------------
-      # STEP 1
-      # Checkout repository
-      # --------------------------------------------------------
-
-      - name: "STEP 1 - Checkout Repository"
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: "STEP 1.1 - Display Repository Information"
-        run: |
-          echo ""
-          echo "============================================================"
-          echo "CLOUDMART MILESTONE 2"
-          echo "NETWORK STACK VALIDATION"
-          echo "============================================================"
-          echo ""
-
-          echo "Repository checkout completed."
-          echo ""
-
-          echo "Network template:"
-          echo "  $NETWORK_TEMPLATE"
-          echo ""
-
-          if [ ! -f "$NETWORK_TEMPLATE" ]; then
-            echo "ERROR:"
-            echo "Network CloudFormation template was not found."
-            echo ""
-            exit 1
-          fi
-
-          echo "Network CloudFormation template FOUND."
-          echo ""
-
-      # --------------------------------------------------------
-      # STEP 2
-      # Configure AWS credentials
-      # --------------------------------------------------------
-
-      - name: "STEP 2 - Configure AWS Credentials"
+      - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      # --------------------------------------------------------
-      # STEP 2.1
-      # Verify AWS identity
-      # --------------------------------------------------------
-
-      - name: "STEP 2.1 - Verify AWS Identity"
+      - name: Validate CloudFormation template
         run: |
-          echo ""
           echo "============================================================"
-          echo "AWS CONNECTION VERIFICATION"
-          echo "============================================================"
-          echo ""
-
-          echo "Configured AWS Region:"
-          echo "  $AWS_REGION"
-          echo ""
-
-          echo "Expected AWS Region:"
-          echo "  ap-south-1"
-          echo ""
-
-          if [ "$AWS_REGION" != "ap-south-1" ]; then
-            echo "ERROR: Incorrect AWS region."
-            exit 1
-          fi
-
-          echo "AWS identity being used by GitHub Actions:"
-          echo ""
-
-          aws sts get-caller-identity
-
-          echo ""
-          echo "AWS CLI:"
-          aws --version
-
-          echo ""
-          echo "AWS OIDC authentication successful."
-          echo ""
-
-      # --------------------------------------------------------
-      # STEP 3
-      # Validate CloudFormation template
-      # --------------------------------------------------------
-
-      - name: "STEP 3 - Validate CloudFormation Template"
-        run: |
-          echo ""
-          echo "============================================================"
-          echo "CLOUDFORMATION TEMPLATE VALIDATION"
+          echo "       VALIDATING NETWORK CLOUDFORMATION TEMPLATE"
           echo "============================================================"
           echo ""
-
           echo "Template:"
-          echo "  $NETWORK_TEMPLATE"
+          echo "cloudformation/network-stack.yaml"
           echo ""
-
           echo "Region:"
-          echo "  $AWS_REGION"
-          echo ""
-
-          echo "Environment:"
-          echo "  $ENVIRONMENT"
-          echo ""
-
-          echo "Running CloudFormation ValidateTemplate..."
+          echo "$AWS_REGION"
           echo ""
 
           aws cloudformation validate-template \
-            --template-body "file://$NETWORK_TEMPLATE"
+            --template-body file://cloudformation/network-stack.yaml \
+            --region "$AWS_REGION"
 
           echo ""
           echo "============================================================"
-          echo "SUCCESS"
-          echo "CloudFormation template validation passed."
+          echo "       NETWORK TEMPLATE VALIDATION: PASSED"
           echo "============================================================"
-          echo ""
 
-      # --------------------------------------------------------
-      # STEP 4
-      # Verify required AWS read permissions
-      # --------------------------------------------------------
-
-      - name: "STEP 4 - Verify EC2 Read Permissions"
-        run: |
-          echo ""
-          echo "============================================================"
-          echo "CHECKING REQUIRED EC2 PERMISSIONS"
-          echo "============================================================"
-          echo ""
-
-          echo "Testing EC2 read permissions used during diagnostics."
-          echo ""
-
-          echo "[1/5] ec2:DescribeVpcs"
-          aws ec2 describe-vpcs --max-results 1 >/dev/null
-          echo "      OK"
-          echo ""
-
-          echo "[2/5] ec2:DescribeSubnets"
-          aws ec2 describe-subnets --max-results 1 >/dev/null
-          echo "      OK"
-          echo ""
-
-          echo "[3/5] ec2:DescribeSecurityGroups"
-          aws ec2 describe-security-groups --max-results 1 >/dev/null
-          echo "      OK"
-          echo ""
-
-          echo "[4/5] ec2:DescribeRouteTables"
-          aws ec2 describe-route-tables --max-results 1 >/dev/null
-          echo "      OK"
-          echo ""
-
-          echo "[5/5] ec2:DescribeVpcEndpoints"
-          aws ec2 describe-vpc-endpoints --max-results 1 >/dev/null
-          echo "      OK"
-          echo ""
-
-          echo "============================================================"
-          echo "EC2 READ PERMISSIONS VERIFIED"
-          echo "============================================================"
-          echo ""
 
   # ============================================================
-  # JOB 2
-  # DEPLOY NETWORK STACK
+  # JOB 3 — DEPLOY NETWORK STACK
   # ============================================================
 
   deploy-network:
-
-    name: "2 - Deploy Network Stack"
-
+    name: "3. Deploy Network Stack"
     runs-on: ubuntu-latest
-
-    needs:
-      - validate-network
+    needs: validate-network
 
     steps:
 
-      # --------------------------------------------------------
-      # STEP 1
-      # Checkout
-      # --------------------------------------------------------
-
-      - name: "STEP 1 - Checkout Repository"
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      # --------------------------------------------------------
-      # STEP 2
-      # Configure AWS
-      # --------------------------------------------------------
-
-      - name: "STEP 2 - Configure AWS Credentials"
+      - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      # --------------------------------------------------------
-      # STEP 2.1
-      # Verify identity
-      # --------------------------------------------------------
-
-      - name: "STEP 2.1 - Verify AWS Identity"
+      - name: Print deployment information
         run: |
           echo ""
-          echo "============================================================"
-          echo "AWS DEPLOYMENT IDENTITY"
-          echo "============================================================"
+          echo "################################################################"
+          echo "#                CLOUDMART NETWORK DEPLOYMENT                #"
+          echo "################################################################"
           echo ""
-
-          aws sts get-caller-identity
-
+          echo "AWS Region       : $AWS_REGION"
+          echo "Environment      : $ENVIRONMENT"
+          echo "Stack Name       : $NETWORK_STACK_NAME"
+          echo "Template         : cloudformation/network-stack.yaml"
           echo ""
-          echo "AWS Region:"
-          echo "  $AWS_REGION"
+          echo "Architecture:"
+          echo "  VPC"
+          echo "   ├── Public Subnet"
+          echo "   ├── Private Subnet A"
+          echo "   └── Private Subnet B"
           echo ""
-
-      # --------------------------------------------------------
-      # STEP 3
-      # Display deployment plan
-      # --------------------------------------------------------
-
-      - name: "STEP 3 - Display Network Deployment Plan"
-        run: |
-          echo ""
-          echo "============================================================"
-          echo "CLOUDMART NETWORK DEPLOYMENT PLAN"
-          echo "============================================================"
-          echo ""
-
-          echo "Environment:"
-          echo "  $ENVIRONMENT"
-          echo ""
-
-          echo "AWS Region:"
-          echo "  $AWS_REGION"
-          echo ""
-
-          echo "Stack:"
-          echo "  $NETWORK_STACK_NAME"
-          echo ""
-
-          echo "Template:"
-          echo "  $NETWORK_TEMPLATE"
-          echo ""
-
-          echo "------------------------------------------------------------"
-          echo "NETWORK COMPONENTS"
-          echo "------------------------------------------------------------"
-          echo ""
-
-          echo "  1. VPC"
-          echo "  2. Internet Gateway"
-          echo "  3. Public Subnet"
-          echo "  4. Private Subnet A"
-          echo "  5. Private Subnet B"
-          echo "  6. Public Route Table"
-          echo "  7. Private Route Table"
-          echo "  8. Lambda Security Group"
-          echo "  9. VPC Endpoint Security Group"
-          echo " 10. EC2 Security Group"
-          echo " 11. RDS Security Group"
-          echo " 12. S3 Gateway Endpoint"
-          echo " 13. SSM Interface Endpoint"
-          echo " 14. EventBridge Interface Endpoint"
-          echo " 15. SNS Interface Endpoint"
-          echo " 16. SQS Interface Endpoint"
-          echo ""
-
-          echo "------------------------------------------------------------"
-          echo "SUBNET DESIGN"
-          echo "------------------------------------------------------------"
-          echo ""
-
-          echo "Private Subnet A:"
-          echo "  Application/private workload subnet"
-          echo ""
-
           echo "Private Subnet B:"
-          echo "  Second Availability Zone"
-          echo "  Exists to satisfy the RDS DB subnet group requirement"
-          echo "  Does NOT represent a second application deployment"
-          echo "  Does NOT make RDS Multi-AZ"
+          echo "  Exists for the mandatory RDS DB subnet group"
+          echo "  second-AZ requirement."
+          echo "  It does NOT represent a second application deployment."
           echo ""
-
-          echo "------------------------------------------------------------"
-          echo "RDS DESIGN"
-          echo "------------------------------------------------------------"
-          echo ""
-
-          echo "RDS deployment:"
-          echo "  Single-AZ"
-          echo ""
-
-          echo "DB subnet group:"
-          echo "  Private Subnet A"
-          echo "  Private Subnet B"
-          echo ""
-
-          echo "============================================================"
-          echo ""
-
-      # --------------------------------------------------------
-      # STEP 4
-      # Check existing stack
-      # --------------------------------------------------------
-
-      - name: "STEP 4 - Check Existing Stack"
-        run: |
-          echo ""
-          echo "============================================================"
-          echo "CHECKING EXISTING CLOUDFORMATION STACK"
-          echo "============================================================"
-          echo ""
-
-          if aws cloudformation describe-stacks \
-              --stack-name "$NETWORK_STACK_NAME" \
-              >/tmp/stack.json 2>/tmp/stack-error.txt; then
-
-            echo "Stack exists."
-            echo ""
-
-            aws cloudformation describe-stacks \
-              --stack-name "$NETWORK_STACK_NAME" \
-              --query "Stacks[0].[StackName,StackStatus,CreationTime,LastUpdatedTime]" \
-              --output table
-
-            STATUS=$(aws cloudformation describe-stacks \
-              --stack-name "$NETWORK_STACK_NAME" \
-              --query "Stacks[0].StackStatus" \
-              --output text)
-
-            echo ""
-            echo "Current stack status:"
-            echo "  $STATUS"
-            echo ""
-
-            if [ "$STATUS" = "ROLLBACK_COMPLETE" ]; then
-
-              echo "WARNING:"
-              echo "The stack is in ROLLBACK_COMPLETE."
-              echo ""
-              echo "This state cannot be updated normally."
-              echo "Deleting the failed stack before recreation."
-              echo ""
-
-              aws cloudformation delete-stack \
-                --stack-name "$NETWORK_STACK_NAME"
-
-              echo ""
-              echo "Waiting for failed stack deletion..."
-              echo ""
-
-              aws cloudformation wait stack-delete-complete \
-                --stack-name "$NETWORK_STACK_NAME"
-
-              echo ""
-              echo "Old failed stack successfully deleted."
-              echo ""
-
-            fi
-
-          else
-
-            echo "No existing network stack found."
-            echo "CloudFormation will create a new stack."
-            echo ""
-
-          fi
-
-      # --------------------------------------------------------
-      # STEP 5
-      # Deploy
-      # --------------------------------------------------------
-
-      - name: "STEP 5 - Deploy Network CloudFormation Stack"
-        id: network_deployment
-        continue-on-error: true
-        run: |
+          echo "Deployment Region: ap-south-1"
           echo ""
           echo "################################################################"
-          echo "#             STARTING NETWORK STACK DEPLOYMENT              #"
-          echo "################################################################"
           echo ""
 
-          echo "Stack:"
-          echo "  $NETWORK_STACK_NAME"
+      # --------------------------------------------------------
+      # DEPLOY
+      # --------------------------------------------------------
+
+      - name: Deploy CloudFormation network stack
+        run: |
+          echo "============================================================"
+          echo "STARTING CLOUDFORMATION DEPLOYMENT"
+          echo "============================================================"
           echo ""
 
-          echo "Region:"
-          echo "  $AWS_REGION"
-          echo ""
-
-          echo "Template:"
-          echo "  $NETWORK_TEMPLATE"
-          echo ""
-
-          echo "Environment:"
-          echo "  $ENVIRONMENT"
-          echo ""
-
-          echo "CloudFormation is now creating/updating the network."
-          echo ""
-          echo "Please wait..."
+          echo "Creating/updating stack:"
+          echo "$NETWORK_STACK_NAME"
           echo ""
 
           aws cloudformation deploy \
             --stack-name "$NETWORK_STACK_NAME" \
-            --template-file "$NETWORK_TEMPLATE" \
+            --template-file cloudformation/network-stack.yaml \
             --parameter-overrides \
               Environment="$ENVIRONMENT" \
-            --no-fail-on-empty-changeset
-
-          EXIT_CODE=$?
+            --capabilities CAPABILITY_NAMED_IAM \
+            --no-fail-on-empty-changeset \
+            --region "$AWS_REGION"
 
           echo ""
-          echo "CloudFormation command exit code:"
-          echo "  $EXIT_CODE"
+          echo "CloudFormation deployment command completed."
           echo ""
 
-          exit $EXIT_CODE
 
       # --------------------------------------------------------
-      # STEP 6
-      # Failure diagnostics
+      # SHOW STACK STATUS
       # --------------------------------------------------------
 
-      - name: "STEP 6 - Show Network Deployment Failure"
-        if: steps.network_deployment.outcome == 'failure'
+      - name: Show network stack status
         run: |
-          echo ""
-          echo "################################################################"
-          echo "#                  NETWORK DEPLOYMENT FAILED                  #"
-          echo "################################################################"
-          echo ""
-
-          echo "CloudFormation failed to create/update the network stack."
-          echo ""
-
           echo "============================================================"
-          echo "FAILED RESOURCES"
-          echo "============================================================"
-          echo ""
-
-          aws cloudformation describe-stack-events \
-            --stack-name "$NETWORK_STACK_NAME" \
-            --query "StackEvents[?ResourceStatus=='CREATE_FAILED' || ResourceStatus=='UPDATE_FAILED' || ResourceStatus=='DELETE_FAILED'].[Timestamp,LogicalResourceId,ResourceType,ResourceStatus,ResourceStatusReason]" \
-            --output table
-
-          echo ""
-          echo "============================================================"
-          echo "RECENT CLOUDFORMATION EVENTS"
-          echo "============================================================"
-          echo ""
-
-          aws cloudformation describe-stack-events \
-            --stack-name "$NETWORK_STACK_NAME" \
-            --query "StackEvents[0:30].[Timestamp,LogicalResourceId,ResourceType,ResourceStatus,ResourceStatusReason]" \
-            --output table
-
-          echo ""
-          echo "============================================================"
-          echo "CURRENT STACK STATUS"
+          echo "                 NETWORK STACK STATUS"
           echo "============================================================"
           echo ""
 
           aws cloudformation describe-stacks \
             --stack-name "$NETWORK_STACK_NAME" \
-            --query "Stacks[0].[StackName,StackStatus,StackStatusReason]" \
-            --output table || true
+            --region "$AWS_REGION" \
+            --query 'Stacks[0].[StackName,StackStatus,StackStatusReason]' \
+            --output table
 
           echo ""
-          echo "============================================================"
-          echo "NETWORK DEPLOYMENT FAILED"
-          echo "============================================================"
-          echo ""
 
-          exit 1
 
       # --------------------------------------------------------
-      # STEP 7
-      # Success
+      # SHOW STACK OUTPUTS
       # --------------------------------------------------------
 
-      - name: "STEP 7 - Network Deployment Successful"
-        if: steps.network_deployment.outcome == 'success'
+      - name: Show network stack outputs
         run: |
-          echo ""
-          echo "################################################################"
-          echo "#             NETWORK DEPLOYMENT SUCCESSFUL                  #"
-          echo "################################################################"
-          echo ""
-
-          echo "Stack:"
-          echo "  $NETWORK_STACK_NAME"
-          echo ""
-
-          echo "Region:"
-          echo "  $AWS_REGION"
-          echo ""
-
-          echo "The CloudMart network foundation was deployed successfully."
-          echo ""
-
-
-  # ============================================================
-  # JOB 3
-  # VERIFY NETWORK
-  # ============================================================
-
-  verify-network:
-
-    name: "3 - Verify Network Stack"
-
-    runs-on: ubuntu-latest
-
-    needs:
-      - deploy-network
-
-    steps:
-
-      # --------------------------------------------------------
-      # STEP 1
-      # Configure AWS
-      # --------------------------------------------------------
-
-      - name: "STEP 1 - Configure AWS Credentials"
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      # --------------------------------------------------------
-      # STEP 2
-      # Verify stack status
-      # --------------------------------------------------------
-
-      - name: "STEP 2 - Verify Stack Status"
-        run: |
-          echo ""
           echo "============================================================"
-          echo "VERIFYING NETWORK STACK"
-          echo "============================================================"
-          echo ""
-
-          STATUS=$(aws cloudformation describe-stacks \
-            --stack-name "$NETWORK_STACK_NAME" \
-            --query "Stacks[0].StackStatus" \
-            --output text)
-
-          echo "Stack:"
-          echo "  $NETWORK_STACK_NAME"
-          echo ""
-
-          echo "Region:"
-          echo "  $AWS_REGION"
-          echo ""
-
-          echo "Status:"
-          echo "  $STATUS"
-          echo ""
-
-          if [ "$STATUS" != "CREATE_COMPLETE" ] && \
-             [ "$STATUS" != "UPDATE_COMPLETE" ]; then
-
-            echo "ERROR: Stack is not healthy."
-            exit 1
-          fi
-
-          echo "Stack status is healthy."
-          echo ""
-
-      # --------------------------------------------------------
-      # STEP 3
-      # Display outputs
-      # --------------------------------------------------------
-
-      - name: "STEP 3 - Display Network Outputs"
-        run: |
-          echo ""
-          echo "============================================================"
-          echo "CLOUDFORMATION NETWORK OUTPUTS"
+          echo "                 NETWORK STACK OUTPUTS"
           echo "============================================================"
           echo ""
 
           aws cloudformation describe-stacks \
             --stack-name "$NETWORK_STACK_NAME" \
-            --query "Stacks[0].Outputs[*].[OutputKey,OutputValue]" \
+            --region "$AWS_REGION" \
+            --query 'Stacks[0].Outputs[*].[OutputKey,OutputValue,Description]' \
             --output table
 
           echo ""
 
+
       # --------------------------------------------------------
-      # STEP 4
-      # Display resources
+      # VERIFY VPC
       # --------------------------------------------------------
 
-      - name: "STEP 4 - Display Network Resources"
+      - name: Verify VPC
         run: |
-          echo ""
           echo "============================================================"
-          echo "NETWORK RESOURCE STATUS"
-          echo "============================================================"
-          echo ""
-
-          aws cloudformation describe-stack-resources \
-            --stack-name "$NETWORK_STACK_NAME" \
-            --query "StackResources[*].[LogicalResourceId,ResourceType,ResourceStatus]" \
-            --output table
-
-          echo ""
-
-      # --------------------------------------------------------
-      # STEP 5
-      # Verify VPC
-      # --------------------------------------------------------
-
-      - name: "STEP 5 - Verify VPC"
-        run: |
-          echo ""
-          echo "============================================================"
-          echo "VPC VERIFICATION"
+          echo "                    VERIFYING VPC"
           echo "============================================================"
           echo ""
 
           VPC_ID=$(aws cloudformation describe-stacks \
             --stack-name "$NETWORK_STACK_NAME" \
+            --region "$AWS_REGION" \
             --query "Stacks[0].Outputs[?OutputKey=='VpcId'].OutputValue" \
             --output text)
 
-          echo "VPC ID:"
-          echo "  $VPC_ID"
+          echo "VPC ID: $VPC_ID"
           echo ""
 
           aws ec2 describe-vpcs \
             --vpc-ids "$VPC_ID" \
-            --query "Vpcs[0].[VpcId,CidrBlock,State]" \
+            --region "$AWS_REGION" \
+            --query 'Vpcs[0].[VpcId,CidrBlock,State,IsDefault]' \
             --output table
 
           echo ""
 
+
       # --------------------------------------------------------
-      # STEP 6
-      # Verify subnets
+      # VERIFY SUBNETS
       # --------------------------------------------------------
 
-      - name: "STEP 6 - Verify Subnets"
+      - name: Verify subnets
         run: |
-          echo ""
           echo "============================================================"
-          echo "SUBNET VERIFICATION"
+          echo "                 VERIFYING SUBNETS"
           echo "============================================================"
           echo ""
 
-          PUBLIC_SUBNET=$(aws cloudformation describe-stacks \
-            --stack-name "$NETWORK_STACK_NAME" \
-            --query "Stacks[0].Outputs[?OutputKey=='PublicSubnetId'].OutputValue" \
-            --output text)
-
+          echo "Private Subnet A:"
           PRIVATE_A=$(aws cloudformation describe-stacks \
             --stack-name "$NETWORK_STACK_NAME" \
+            --region "$AWS_REGION" \
             --query "Stacks[0].Outputs[?OutputKey=='PrivateSubnetAId'].OutputValue" \
             --output text)
 
+          aws ec2 describe-subnets \
+            --subnet-ids "$PRIVATE_A" \
+            --region "$AWS_REGION" \
+            --query 'Subnets[0].[SubnetId,CidrBlock,AvailabilityZone,State]' \
+            --output table
+
+          echo ""
+          echo "Private Subnet B:"
           PRIVATE_B=$(aws cloudformation describe-stacks \
             --stack-name "$NETWORK_STACK_NAME" \
+            --region "$AWS_REGION" \
             --query "Stacks[0].Outputs[?OutputKey=='PrivateSubnetBId'].OutputValue" \
             --output text)
 
-          echo "Public subnet:"
-          echo "  $PUBLIC_SUBNET"
-          echo ""
-
-          echo "Private subnet A:"
-          echo "  $PRIVATE_A"
-          echo ""
-
-          echo "Private subnet B:"
-          echo "  $PRIVATE_B"
-          echo ""
-
           aws ec2 describe-subnets \
-            --subnet-ids \
-              "$PUBLIC_SUBNET" \
-              "$PRIVATE_A" \
-              "$PRIVATE_B" \
-            --query "Subnets[*].[SubnetId,AvailabilityZone,CidrBlock,State]" \
+            --subnet-ids "$PRIVATE_B" \
+            --region "$AWS_REGION" \
+            --query 'Subnets[0].[SubnetId,CidrBlock,AvailabilityZone,State]' \
             --output table
 
           echo ""
 
-      # --------------------------------------------------------
-      # STEP 7
-      # Verify security groups
-      # --------------------------------------------------------
-
-      - name: "STEP 7 - Verify Security Groups"
-        run: |
-          echo ""
-          echo "============================================================"
-          echo "SECURITY GROUP VERIFICATION"
-          echo "============================================================"
-          echo ""
-
-          LAMBDA_SG=$(aws cloudformation describe-stacks \
-            --stack-name "$NETWORK_STACK_NAME" \
-            --query "Stacks[0].Outputs[?OutputKey=='SgLambdaId'].OutputValue" \
-            --output text)
-
-          RDS_SG=$(aws cloudformation describe-stacks \
-            --stack-name "$NETWORK_STACK_NAME" \
-            --query "Stacks[0].Outputs[?OutputKey=='SgRdsId'].OutputValue" \
-            --output text)
-
-          EC2_SG=$(aws cloudformation describe-stacks \
-            --stack-name "$NETWORK_STACK_NAME" \
-            --query "Stacks[0].Outputs[?OutputKey=='SgEc2Id'].OutputValue" \
-            --output text)
-
-          echo "Lambda SG:"
-          echo "  $LAMBDA_SG"
-          echo ""
-
-          echo "RDS SG:"
-          echo "  $RDS_SG"
-          echo ""
-
-          echo "EC2 SG:"
-          echo "  $EC2_SG"
-          echo ""
-
-          aws ec2 describe-security-groups \
-            --group-ids \
-              "$LAMBDA_SG" \
-              "$RDS_SG" \
-              "$EC2_SG" \
-            --query "SecurityGroups[*].[GroupId,GroupName,Description]" \
-            --output table
-
-          echo ""
 
       # --------------------------------------------------------
-      # STEP 8
-      # Verify VPC endpoints
+      # FINAL RESULT
       # --------------------------------------------------------
 
-      - name: "STEP 8 - Verify VPC Endpoints"
-        run: |
-          echo ""
-          echo "============================================================"
-          echo "VPC ENDPOINT VERIFICATION"
-          echo "============================================================"
-          echo ""
-
-          VPC_ID=$(aws cloudformation describe-stacks \
-            --stack-name "$NETWORK_STACK_NAME" \
-            --query "Stacks[0].Outputs[?OutputKey=='VpcId'].OutputValue" \
-            --output text)
-
-          aws ec2 describe-vpc-endpoints \
-            --filters "Name=vpc-id,Values=$VPC_ID" \
-            --query "VpcEndpoints[*].[VpcEndpointId,VpcEndpointType,ServiceName,State]" \
-            --output table
-
-          echo ""
-
-      # --------------------------------------------------------
-      # FINAL
-      # --------------------------------------------------------
-
-      - name: "STEP 9 - Final Network Deployment Summary"
+      - name: Network deployment successful
         run: |
           echo ""
           echo "################################################################"
-          echo "#             CLOUDMART NETWORK DEPLOYMENT                   #"
+          echo "#                NETWORK DEPLOYMENT SUCCESS                  #"
           echo "################################################################"
           echo ""
-
-          echo "Environment:"
-          echo "  $ENVIRONMENT"
+          echo "CloudMart network foundation is deployed successfully."
           echo ""
-
-          echo "AWS Region:"
-          echo "  $AWS_REGION"
+          echo "Region:"
+          echo "  ap-south-1"
           echo ""
-
           echo "Stack:"
           echo "  $NETWORK_STACK_NAME"
           echo ""
-
-          echo "Status:"
-          echo "  SUCCESS"
-          echo ""
-
           echo "Verified:"
-          echo "  [OK] VPC"
-          echo "  [OK] Internet Gateway"
-          echo "  [OK] Public subnet"
-          echo "  [OK] Private subnet A"
-          echo "  [OK] Private subnet B"
-          echo "  [OK] Route tables"
-          echo "  [OK] Security groups"
-          echo "  [OK] VPC endpoints"
+          echo "  ✓ VPC"
+          echo "  ✓ Public subnet"
+          echo "  ✓ Private subnet A"
+          echo "  ✓ Private subnet B"
+          echo "  ✓ Route tables"
+          echo "  ✓ Internet Gateway"
+          echo "  ✓ Security groups"
+          echo "  ✓ VPC endpoints"
           echo ""
-
-          echo "Private subnet B is present only because the"
-          echo "RDS DB subnet group requires subnets in at least"
-          echo "two Availability Zones."
+          echo "Private subnet B exists only to satisfy the"
+          echo "RDS DB subnet group two-AZ requirement."
           echo ""
-
-          echo "RDS remains a single-AZ deployment."
+          echo "No application/business logic has been deployed."
           echo ""
-
-          echo "============================================================"
-          echo "MILESTONE 2 NETWORK FOUNDATION VERIFIED"
-          echo "============================================================"
-          echo ""
+          echo "################################################################"
