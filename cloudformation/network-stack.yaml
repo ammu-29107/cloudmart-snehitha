@@ -1,248 +1,488 @@
 AWSTemplateFormatVersion: '2010-09-09'
+
 Description: >
-  CloudMart network-stack — VPC, one public subnet (EC2 dashboard only),
-  two private subnets (private subnet A hosts Lambda + RDS; private subnet
-  B exists solely to satisfy RDS's two-AZ DB subnet group requirement and
-  never hosts a live resource), Internet Gateway, route tables, security
-  groups, and VPC endpoints. No NAT Gateway anywhere in this stack.
+  CloudMart Milestone 2 network foundation.
+  The application runs in the primary private subnet.
+  A second private subnet exists only because an RDS DB subnet group
+  must span at least two Availability Zones.
 
 Parameters:
+
   Environment:
     Type: String
-    AllowedValues: [dev, prod]
+    AllowedValues:
+      - dev
+      - prod
 
-Mappings:
-  CidrMap:
-    dev:
-      Vpc: 10.0.0.0/16
-      PublicSubnet: 10.0.1.0/24
-      PrivateSubnetA: 10.0.11.0/24
-      PrivateSubnetB: 10.0.12.0/24
-    prod:
-      Vpc: 10.1.0.0/16
-      PublicSubnet: 10.1.1.0/24
-      PrivateSubnetA: 10.1.11.0/24
-      PrivateSubnetB: 10.1.12.0/24
+  VpcCidr:
+    Type: String
+    Default: 10.0.0.0/16
+
+  AvailabilityZoneA:
+    Type: AWS::EC2::AvailabilityZone::Name
+
+  AvailabilityZoneB:
+    Type: AWS::EC2::AvailabilityZone::Name
+
+
+Conditions:
+
+  IsProd:
+    !Equals
+      - !Ref Environment
+      - prod
+
 
 Resources:
 
-  # ---------------- VPC ----------------
-  Vpc:
+  # ============================================================
+  # VPC
+  # ============================================================
+
+  VPC:
     Type: AWS::EC2::VPC
+
     Properties:
-      CidrBlock: !FindInMap [CidrMap, !Ref Environment, Vpc]
+      CidrBlock: !Ref VpcCidr
+
       EnableDnsSupport: true
       EnableDnsHostnames: true
+
       Tags:
-        - {Key: Name, Value: !Sub cloudmart-${Environment}-vpc}
+        - Key: Name
+          Value: !Sub cloudmart-${Environment}-vpc
+
+
+  # ============================================================
+  # INTERNET GATEWAY
+  # ============================================================
 
   InternetGateway:
     Type: AWS::EC2::InternetGateway
+
     Properties:
       Tags:
-        - {Key: Name, Value: !Sub cloudmart-${Environment}-igw}
+        - Key: Name
+          Value: !Sub cloudmart-${Environment}-igw
 
-  IgwAttachment:
+
+  InternetGatewayAttachment:
     Type: AWS::EC2::VPCGatewayAttachment
+
     Properties:
-      VpcId: !Ref Vpc
+      VpcId: !Ref VPC
       InternetGatewayId: !Ref InternetGateway
 
-  # ---------------- Subnets ----------------
+
+  # ============================================================
+  # PUBLIC SUBNET
+  # ============================================================
+
   PublicSubnet:
     Type: AWS::EC2::Subnet
+
     Properties:
-      VpcId: !Ref Vpc
-      CidrBlock: !FindInMap [CidrMap, !Ref Environment, PublicSubnet]
-      AvailabilityZone: !Select [0, !GetAZs '']
+      VpcId: !Ref VPC
+
+      CidrBlock:
+        !If
+          - IsProd
+          - 10.1.1.0/24
+          - 10.0.1.0/24
+
+      AvailabilityZone: !Ref AvailabilityZoneA
+
       MapPublicIpOnLaunch: true
+
       Tags:
-        - {Key: Name, Value: !Sub cloudmart-${Environment}-public-a}
+        - Key: Name
+          Value: !Sub cloudmart-${Environment}-public-a
+
+
+  # ============================================================
+  # PRIMARY PRIVATE SUBNET
+  #
+  # THIS IS THE APPLICATION SUBNET.
+  # Lambda + Single-AZ RDS use this subnet.
+  # ============================================================
 
   PrivateSubnetA:
     Type: AWS::EC2::Subnet
+
     Properties:
-      VpcId: !Ref Vpc
-      CidrBlock: !FindInMap [CidrMap, !Ref Environment, PrivateSubnetA]
-      AvailabilityZone: !Select [0, !GetAZs '']
+      VpcId: !Ref VPC
+
+      CidrBlock:
+        !If
+          - IsProd
+          - 10.1.2.0/24
+          - 10.0.2.0/24
+
+      AvailabilityZone: !Ref AvailabilityZoneA
+
+      MapPublicIpOnLaunch: false
+
       Tags:
-        - {Key: Name, Value: !Sub cloudmart-${Environment}-private-a}
+        - Key: Name
+          Value: !Sub cloudmart-${Environment}-private-a
+
+        - Key: Purpose
+          Value: Application Lambda and Single-AZ RDS
+
+
+  # ============================================================
+  # SECOND PRIVATE SUBNET
+  #
+  # IMPORTANT:
+  # This subnet exists ONLY for the RDS DB subnet group
+  # two-AZ requirement.
+  #
+  # No application Lambda is placed here.
+  # No EC2 application is placed here.
+  # No second RDS instance is placed here.
+  # ============================================================
 
   PrivateSubnetB:
     Type: AWS::EC2::Subnet
-    Properties:
-      VpcId: !Ref Vpc
-      CidrBlock: !FindInMap [CidrMap, !Ref Environment, PrivateSubnetB]
-      AvailabilityZone: !Select [1, !GetAZs '']
-      Tags:
-        - {Key: Name, Value: !Sub cloudmart-${Environment}-private-b}
-        - {Key: Purpose, Value: "RDS subnet group AZ requirement only — never hosts a resource"}
 
-  # ---------------- Route tables ----------------
+    Properties:
+      VpcId: !Ref VPC
+
+      CidrBlock:
+        !If
+          - IsProd
+          - 10.1.3.0/24
+          - 10.0.3.0/24
+
+      AvailabilityZone: !Ref AvailabilityZoneB
+
+      MapPublicIpOnLaunch: false
+
+      Tags:
+        - Key: Name
+          Value: !Sub cloudmart-${Environment}-private-b
+
+        - Key: Purpose
+          Value: RDS DB subnet group requirement only
+
+
+  # ============================================================
+  # PUBLIC ROUTE TABLE
+  # ============================================================
+
   PublicRouteTable:
     Type: AWS::EC2::RouteTable
-    Properties:
-      VpcId: !Ref Vpc
-      Tags:
-        - {Key: Name, Value: !Sub cloudmart-${Environment}-public-rt}
 
-  PublicInternetRoute:
+    Properties:
+      VpcId: !Ref VPC
+
+      Tags:
+        - Key: Name
+          Value: !Sub cloudmart-${Environment}-public-rt
+
+
+  PublicDefaultRoute:
     Type: AWS::EC2::Route
-    DependsOn: IgwAttachment
+
+    DependsOn: InternetGatewayAttachment
+
     Properties:
       RouteTableId: !Ref PublicRouteTable
+
       DestinationCidrBlock: 0.0.0.0/0
+
       GatewayId: !Ref InternetGateway
 
-  PublicSubnetRouteAssoc:
+
+  PublicRouteAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
+
     Properties:
       SubnetId: !Ref PublicSubnet
       RouteTableId: !Ref PublicRouteTable
 
-  # Private route table has no internet route at all — intentional.
+
+  # ============================================================
+  # PRIVATE ROUTE TABLE
+  #
+  # NO INTERNET ROUTE.
+  # NO NAT GATEWAY.
+  # AWS service communication happens through VPC endpoints.
+  # ============================================================
+
   PrivateRouteTable:
     Type: AWS::EC2::RouteTable
-    Properties:
-      VpcId: !Ref Vpc
-      Tags:
-        - {Key: Name, Value: !Sub cloudmart-${Environment}-private-rt}
 
-  PrivateSubnetARouteAssoc:
+    Properties:
+      VpcId: !Ref VPC
+
+      Tags:
+        - Key: Name
+          Value: !Sub cloudmart-${Environment}-private-rt
+
+
+  PrivateARouteAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
+
     Properties:
       SubnetId: !Ref PrivateSubnetA
       RouteTableId: !Ref PrivateRouteTable
 
-  PrivateSubnetBRouteAssoc:
+
+  PrivateBRouteAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
+
     Properties:
       SubnetId: !Ref PrivateSubnetB
       RouteTableId: !Ref PrivateRouteTable
 
-  # ---------------- Security groups ----------------
-  SgLambda:
-    Type: AWS::EC2::SecurityGroup
-    Properties:
-      GroupDescription: Lambda functions — no inbound rule needed
-      VpcId: !Ref Vpc
-      Tags: [{Key: Name, Value: !Sub cloudmart-${Environment}-sg-lambda}]
 
-  SgVpce:
+  # ============================================================
+  # SECURITY GROUPS
+  # ============================================================
+
+  LambdaSecurityGroup:
     Type: AWS::EC2::SecurityGroup
+
     Properties:
-      GroupDescription: Interface VPC endpoints — accepts HTTPS from Lambda only
-      VpcId: !Ref Vpc
+      GroupDescription: >
+        CloudMart Lambda security group.
+        No inbound traffic.
+
+      VpcId: !Ref VPC
+
+      SecurityGroupEgress:
+
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          DestinationSecurityGroupId: !Ref RdsSecurityGroup
+
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          DestinationSecurityGroupId: !Ref EndpointSecurityGroup
+
+      Tags:
+        - Key: Name
+          Value: !Sub cloudmart-${Environment}-sg-lambda
+
+
+  RdsSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+
+    Properties:
+      GroupDescription: >
+        CloudMart RDS MySQL security group.
+        Only Lambda can reach MySQL.
+
+      VpcId: !Ref VPC
+
+      SecurityGroupEgress:
+
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+
+      Tags:
+        - Key: Name
+          Value: !Sub cloudmart-${Environment}-sg-rds
+
+
+  EndpointSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+
+    Properties:
+      GroupDescription: >
+        HTTPS access to AWS interface endpoints
+        from Lambda only.
+
+      VpcId: !Ref VPC
+
       SecurityGroupIngress:
-        - {IpProtocol: tcp, FromPort: 443, ToPort: 443, SourceSecurityGroupId: !Ref SgLambda}
-      Tags: [{Key: Name, Value: !Sub cloudmart-${Environment}-sg-vpce}]
 
-  SgEc2:
-    Type: AWS::EC2::SecurityGroup
-    Properties:
-      GroupDescription: EC2 dashboard — HTTP inbound for the review, outbound to RDS/S3
-      VpcId: !Ref Vpc
-      SecurityGroupIngress:
-        - {IpProtocol: tcp, FromPort: 5000, ToPort: 5000, CidrIp: 0.0.0.0/0}
-      Tags: [{Key: Name, Value: !Sub cloudmart-${Environment}-sg-ec2}]
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          SourceSecurityGroupId: !Ref LambdaSecurityGroup
 
-  SgRds:
-    Type: AWS::EC2::SecurityGroup
-    Properties:
-      GroupDescription: RDS MySQL — inbound 3306 from SG-Lambda and SG-EC2 only, never 0.0.0.0/0
-      VpcId: !Ref Vpc
-      SecurityGroupIngress:
-        - {IpProtocol: tcp, FromPort: 3306, ToPort: 3306, SourceSecurityGroupId: !Ref SgLambda}
-        - {IpProtocol: tcp, FromPort: 3306, ToPort: 3306, SourceSecurityGroupId: !Ref SgEc2}
-      Tags: [{Key: Name, Value: !Sub cloudmart-${Environment}-sg-rds}]
+      SecurityGroupEgress:
 
-  # Lambda's outbound rules, expressed as egress on SG-Lambda for completeness
-  SgLambdaEgressToRds:
-    Type: AWS::EC2::SecurityGroupEgress
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+
+      Tags:
+        - Key: Name
+          Value: !Sub cloudmart-${Environment}-sg-vpc-endpoints
+
+
+  RdsFromLambdaIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+
     Properties:
-      GroupId: !Ref SgLambda
+      GroupId: !Ref RdsSecurityGroup
+
       IpProtocol: tcp
+
       FromPort: 3306
       ToPort: 3306
-      DestinationSecurityGroupId: !Ref SgRds
 
-  SgLambdaEgressToVpce:
-    Type: AWS::EC2::SecurityGroupEgress
-    Properties:
-      GroupId: !Ref SgLambda
-      IpProtocol: tcp
-      FromPort: 443
-      ToPort: 443
-      DestinationSecurityGroupId: !Ref SgVpce
+      SourceSecurityGroupId: !Ref LambdaSecurityGroup
 
-  # ---------------- VPC Endpoints ----------------
+
+  # ============================================================
+  # S3 GATEWAY ENDPOINT
+  # ============================================================
+
   S3GatewayEndpoint:
     Type: AWS::EC2::VPCEndpoint
+
     Properties:
-      VpcId: !Ref Vpc
-      ServiceName: !Sub com.amazonaws.${AWS::Region}.s3
+      VpcId: !Ref VPC
+
       VpcEndpointType: Gateway
-      RouteTableIds: [!Ref PrivateRouteTable]
+
+      ServiceName:
+        !Sub com.amazonaws.${AWS::Region}.s3
+
+      RouteTableIds:
+        - !Ref PrivateRouteTable
+
+
+  # ============================================================
+  # SSM INTERFACE ENDPOINT
+  # ============================================================
 
   SsmInterfaceEndpoint:
     Type: AWS::EC2::VPCEndpoint
-    Properties:
-      VpcId: !Ref Vpc
-      ServiceName: !Sub com.amazonaws.${AWS::Region}.ssm
-      VpcEndpointType: Interface
-      PrivateDnsEnabled: true
-      SubnetIds: [!Ref PrivateSubnetA]
-      SecurityGroupIds: [!Ref SgVpce]
 
-  EventBridgeInterfaceEndpoint:
-    Type: AWS::EC2::VPCEndpoint
     Properties:
-      VpcId: !Ref Vpc
-      ServiceName: !Sub com.amazonaws.${AWS::Region}.events
-      VpcEndpointType: Interface
-      PrivateDnsEnabled: true
-      SubnetIds: [!Ref PrivateSubnetA]
-      SecurityGroupIds: [!Ref SgVpce]
+      VpcId: !Ref VPC
 
-  SnsInterfaceEndpoint:
-    Type: AWS::EC2::VPCEndpoint
-    Properties:
-      VpcId: !Ref Vpc
-      ServiceName: !Sub com.amazonaws.${AWS::Region}.sns
       VpcEndpointType: Interface
+
+      ServiceName:
+        !Sub com.amazonaws.${AWS::Region}.ssm
+
       PrivateDnsEnabled: true
-      SubnetIds: [!Ref PrivateSubnetA]
-      SecurityGroupIds: [!Ref SgVpce]
+
+      SubnetIds:
+        - !Ref PrivateSubnetA
+
+      SecurityGroupIds:
+        - !Ref EndpointSecurityGroup
+
+
+  # ============================================================
+  # SQS INTERFACE ENDPOINT
+  # ============================================================
 
   SqsInterfaceEndpoint:
     Type: AWS::EC2::VPCEndpoint
+
     Properties:
-      VpcId: !Ref Vpc
-      ServiceName: !Sub com.amazonaws.${AWS::Region}.sqs
+      VpcId: !Ref VPC
+
       VpcEndpointType: Interface
+
+      ServiceName:
+        !Sub com.amazonaws.${AWS::Region}.sqs
+
       PrivateDnsEnabled: true
-      SubnetIds: [!Ref PrivateSubnetA]
-      SecurityGroupIds: [!Ref SgVpce]
+
+      SubnetIds:
+        - !Ref PrivateSubnetA
+
+      SecurityGroupIds:
+        - !Ref EndpointSecurityGroup
+
+
+  # ============================================================
+  # SNS INTERFACE ENDPOINT
+  # ============================================================
+
+  SnsInterfaceEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+
+    Properties:
+      VpcId: !Ref VPC
+
+      VpcEndpointType: Interface
+
+      ServiceName:
+        !Sub com.amazonaws.${AWS::Region}.sns
+
+      PrivateDnsEnabled: true
+
+      SubnetIds:
+        - !Ref PrivateSubnetA
+
+      SecurityGroupIds:
+        - !Ref EndpointSecurityGroup
+
+
+  # ============================================================
+  # EVENTBRIDGE INTERFACE ENDPOINT
+  # ============================================================
+
+  EventBridgeInterfaceEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+
+    Properties:
+      VpcId: !Ref VPC
+
+      VpcEndpointType: Interface
+
+      ServiceName:
+        !Sub com.amazonaws.${AWS::Region}.events
+
+      PrivateDnsEnabled: true
+
+      SubnetIds:
+        - !Ref PrivateSubnetA
+
+      SecurityGroupIds:
+        - !Ref EndpointSecurityGroup
+
 
 Outputs:
+
   VpcId:
-    Value: !Ref Vpc
-    Export: {Name: !Sub cloudmart-${Environment}-vpc-id}
+    Value: !Ref VPC
+    Export:
+      Name: !Sub cloudmart-${Environment}-vpc-id
+
+
   PublicSubnetId:
     Value: !Ref PublicSubnet
-    Export: {Name: !Sub cloudmart-${Environment}-public-subnet}
+    Export:
+      Name: !Sub cloudmart-${Environment}-public-subnet-id
+
+
   PrivateSubnetAId:
     Value: !Ref PrivateSubnetA
-    Export: {Name: !Sub cloudmart-${Environment}-private-subnet-a}
+    Export:
+      Name: !Sub cloudmart-${Environment}-private-subnet-a
+
+
   PrivateSubnetBId:
     Value: !Ref PrivateSubnetB
-    Export: {Name: !Sub cloudmart-${Environment}-private-subnet-b}
-  SgLambdaId:
-    Value: !Ref SgLambda
-    Export: {Name: !Sub cloudmart-${Environment}-sg-lambda}
-  SgRdsId:
-    Value: !Ref SgRds
-    Export: {Name: !Sub cloudmart-${Environment}-sg-rds}
-  SgEc2Id:
-    Value: !Ref SgEc2
-    Export: {Name: !Sub cloudmart-${Environment}-sg-ec2}
+    Export:
+      Name: !Sub cloudmart-${Environment}-private-subnet-b
+
+
+  LambdaSecurityGroupId:
+    Value: !Ref LambdaSecurityGroup
+    Export:
+      Name: !Sub cloudmart-${Environment}-sg-lambda
+
+
+  RdsSecurityGroupId:
+    Value: !Ref RdsSecurityGroup
+    Export:
+      Name: !Sub cloudmart-${Environment}-sg-rds
+
+
+  EndpointSecurityGroupId:
+    Value: !Ref EndpointSecurityGroup
+    Export:
+      Name: !Sub cloudmart-${Environment}-sg-vpc-endpoints
