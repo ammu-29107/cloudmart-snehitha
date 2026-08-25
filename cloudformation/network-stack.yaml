@@ -243,4 +243,8 @@ Outputs:
     Export: {Name: !Sub cloudmart-${Environment}-sg-rds}
   SgEc2Id:
     Value: !Ref SgEc2
+<<<<<<< HEAD
     Export: {Name: !Sub cloudmart-${Environment}-sg-ec2}
+=======
+    Export: {Name: !Sub cloudmart-${Environment}-sg-ec2}
+>>>>>>> 183baf3a03efc19247ed3fe3989496d9a80681ff
