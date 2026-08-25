@@ -1,9 +1,25 @@
-name: CloudMart Deploy
+name: CloudMart Milestone 2 Deploy
 
 on:
   push:
     branches: [main]
+    paths:
+      - 'cloudformation/**'
+      - 'lambda/**'
+      - 'scripts/**'
+      - 'sql/**'
+      - '.github/workflows/deploy.yaml'
+
   workflow_dispatch:
+    inputs:
+      environment:
+        description: Deployment environment
+        required: true
+        default: dev
+        type: choice
+        options:
+          - dev
+          - prod
 
 permissions:
   id-token: write
@@ -11,254 +27,87 @@ permissions:
 
 env:
   AWS_REGION: ap-south-1
-  ENVIRONMENT: dev
-  LAMBDA_BUCKET: cloudmart-dev-lambda-artifacts
+  ENVIRONMENT: ${{ github.event.inputs.environment || 'dev' }}
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+
     steps:
 
-      # ---------- Setup ----------
+      # ------------------------------------------------------------
+      # SOURCE
+      # ------------------------------------------------------------
+
       - name: Checkout source
         uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: '3.12'
 
-      - name: Configure AWS credentials
+      # ------------------------------------------------------------
+      # AWS AUTHENTICATION
+      # ------------------------------------------------------------
+
+      - name: Configure AWS credentials through GitHub OIDC
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Verify identity
-        run: aws sts get-caller-identity
+      - name: Verify AWS identity
+        run: |
+          aws sts get-caller-identity
+
+      # ------------------------------------------------------------
+      # VALIDATION
+      # ------------------------------------------------------------
 
       - name: Validate CloudFormation templates
         run: |
           for tpl in cloudformation/*.yaml; do
+            echo "============================================"
             echo "Validating $tpl"
-            aws cloudformation validate-template --template-body file://$tpl
+            echo "============================================"
+
+            aws cloudformation validate-template \
+              --template-body "file://$tpl" >/dev/null
+
+            echo "$tpl validated successfully."
           done
 
-      # ============================================================
-      # MILESTONE 2 — network, database, connectivity check, storage
-      # ============================================================
-
-      - name: Deploy network-stack
+      - name: Compile Python sources
         run: |
-          aws cloudformation deploy \
-            --stack-name cloudmart-${{ env.ENVIRONMENT }}-network \
-            --template-file cloudformation/network-stack.yaml \
-            --parameter-overrides Environment=${{ env.ENVIRONMENT }} \
-            --capabilities CAPABILITY_NAMED_IAM \
-            --no-fail-on-empty-changeset
+          python -m compileall lambda
 
-      - name: Deploy database-stack
+      - name: Validate deployment script
         run: |
-          aws cloudformation deploy \
-            --stack-name cloudmart-${{ env.ENVIRONMENT }}-database \
-            --template-file cloudformation/database-stack.yaml \
-            --parameter-overrides Environment=${{ env.ENVIRONMENT }} \
-            --capabilities CAPABILITY_NAMED_IAM \
-            --no-fail-on-empty-changeset
+          bash -n scripts/deploy.sh
+          bash -n scripts/validate.sh
 
-      # Bridge: move the AWS-generated RDS password from Secrets Manager
-      # into the SSM path every Lambda expects. Never printed to the log.
-      - name: Bridge RDS password into SSM
+      # ------------------------------------------------------------
+      # MILESTONE 2 DEPLOYMENT
+      # ------------------------------------------------------------
+
+      - name: Deploy Milestone 2 infrastructure
+        env:
+          AUTH_TOKEN: ${{ secrets.CLOUDMART_AUTH_TOKEN }}
         run: |
-          SECRET_ARN=$(aws cloudformation describe-stacks \
-            --stack-name cloudmart-${{ env.ENVIRONMENT }}-database \
-            --query "Stacks[0].Outputs[?OutputKey=='RdsSecretArn'].OutputValue" --output text)
-          DB_PASSWORD=$(aws secretsmanager get-secret-value --secret-id "$SECRET_ARN" \
-            --query "SecretString" --output text | python3 -c "import sys,json; print(json.load(sys.stdin)['password'])")
-          RDS_HOST=$(aws cloudformation describe-stacks \
-            --stack-name cloudmart-${{ env.ENVIRONMENT }}-database \
-            --query "Stacks[0].Outputs[?OutputKey=='RdsEndpointAddress'].OutputValue" --output text)
+          bash scripts/deploy.sh "$ENVIRONMENT"
 
-          aws ssm put-parameter --name "/cloudmart/${{ env.ENVIRONMENT }}/database/password" --type SecureString --value "$DB_PASSWORD" --overwrite
-          aws ssm put-parameter --name "/cloudmart/${{ env.ENVIRONMENT }}/database/host" --type String --value "$RDS_HOST" --overwrite
-          aws ssm put-parameter --name "/cloudmart/${{ env.ENVIRONMENT }}/database/name" --type String --value "cloudmart" --overwrite
-          aws ssm put-parameter --name "/cloudmart/${{ env.ENVIRONMENT }}/database/username" --type String --value "cloudmart_admin" --overwrite
+      # ------------------------------------------------------------
+      # FINAL RESULT
+      # ------------------------------------------------------------
 
-      - name: Package connectivity-test Lambda
-        run: |
-          mkdir -p build/connectivity-test
-          pip install pymysql -t src/connectivity-test/ --break-system-packages
-          cd src/connectivity-test && zip -r ../../build/connectivity-test.zip . && cd ../..
-          aws s3 cp build/connectivity-test.zip \
-            s3://${{ env.LAMBDA_BUCKET }}/${{ env.ENVIRONMENT }}/connectivity-test/connectivity-test-${{ github.sha }}.zip
-
-      - name: Deploy connectivity-test-stack
-        run: |
-          aws cloudformation deploy \
-            --stack-name cloudmart-${{ env.ENVIRONMENT }}-connectivity-test \
-            --template-file cloudformation/connectivity-test-stack.yaml \
-            --parameter-overrides Environment=${{ env.ENVIRONMENT }} LambdaCodeKey=${{ env.ENVIRONMENT }}/connectivity-test/connectivity-test-${{ github.sha }}.zip \
-            --capabilities CAPABILITY_NAMED_IAM \
-            --no-fail-on-empty-changeset
-
-      - name: Verify Lambda can reach RDS from inside the VPC
-        run: |
-          aws lambda invoke --function-name cloudmart-${{ env.ENVIRONMENT }}-connectivity-test \
-            --payload '{}' --cli-binary-format raw-in-base64-out response.json
-          cat response.json
-          python3 -c "
-          import json
-          body = json.load(open('response.json'))
-          payload = json.loads(body['body'])
-          assert payload['success'] is True, f\"RDS connectivity check failed: {payload}\"
-          print('RDS connectivity verified from inside the VPC.')
-          "
-
-      - name: Tear down connectivity-test-stack
+      - name: Publish deployment result
         if: always()
-        run: aws cloudformation delete-stack --stack-name cloudmart-${{ env.ENVIRONMENT }}-connectivity-test
-
-      - name: Deploy storage-stack
         run: |
-          aws cloudformation deploy \
-            --stack-name cloudmart-${{ env.ENVIRONMENT }}-storage \
-            --template-file cloudformation/storage-stack.yaml \
-            --parameter-overrides Environment=${{ env.ENVIRONMENT }} \
-            --capabilities CAPABILITY_NAMED_IAM \
-            --no-fail-on-empty-changeset
-        # LAMBDA_BUCKET must exist from here on — everything below uploads to it.
-
-      - name: Deploy eventbus-stack
-        run: |
-          aws cloudformation deploy \
-            --stack-name cloudmart-${{ env.ENVIRONMENT }}-eventbus \
-            --template-file cloudformation/eventbus-stack.yaml \
-            --parameter-overrides Environment=${{ env.ENVIRONMENT }} \
-            --capabilities CAPABILITY_NAMED_IAM \
-            --no-fail-on-empty-changeset
-
-      # ---------- M2 stub deploys: proves IAM + networking for services not yet built ----------
-      - name: Package stub Lambda
-        run: |
-          mkdir -p build
-          cd src/stub && zip -r ../../build/stub.zip . && cd ../..
-          aws s3 cp build/stub.zip s3://${{ env.LAMBDA_BUCKET }}/${{ env.ENVIRONMENT }}/stub/stub-${{ github.sha }}.zip
-
-      - name: Deploy order-stack (stub)
-        run: |
-          aws cloudformation deploy \
-            --stack-name cloudmart-${{ env.ENVIRONMENT }}-order \
-            --template-file cloudformation/service-stack.yaml \
-            --parameter-overrides Environment=${{ env.ENVIRONMENT }} ServiceName=order LambdaCodeKey=${{ env.ENVIRONMENT }}/stub/stub-${{ github.sha }}.zip CreateFunctionUrl=true \
-            --capabilities CAPABILITY_NAMED_IAM \
-            --no-fail-on-empty-changeset
-
-      - name: Deploy order-processing-stack (stub)
-        run: |
-          aws cloudformation deploy \
-            --stack-name cloudmart-${{ env.ENVIRONMENT }}-order-processing \
-            --template-file cloudformation/service-stack.yaml \
-            --parameter-overrides Environment=${{ env.ENVIRONMENT }} ServiceName=order-processing LambdaCodeKey=${{ env.ENVIRONMENT }}/stub/stub-${{ github.sha }}.zip CreateFunctionUrl=false \
-            --capabilities CAPABILITY_NAMED_IAM \
-            --no-fail-on-empty-changeset
-
-      - name: Deploy reporting-stack (stub)
-        run: |
-          aws cloudformation deploy \
-            --stack-name cloudmart-${{ env.ENVIRONMENT }}-reporting \
-            --template-file cloudformation/service-stack.yaml \
-            --parameter-overrides Environment=${{ env.ENVIRONMENT }} ServiceName=reporting LambdaCodeKey=${{ env.ENVIRONMENT }}/stub/stub-${{ github.sha }}.zip CreateFunctionUrl=true \
-            --capabilities CAPABILITY_NAMED_IAM \
-            --no-fail-on-empty-changeset
-
-      # ============================================================
-      # MILESTONE 3 — auth, schema, Product service
-      # ============================================================
-
-      - name: Deploy auth-stack
-        run: |
-          aws cloudformation deploy \
-            --stack-name cloudmart-${{ env.ENVIRONMENT }}-auth \
-            --template-file cloudformation/auth-stack.yaml \
-            --parameter-overrides Environment=${{ env.ENVIRONMENT }} \
-            --capabilities CAPABILITY_NAMED_IAM \
-            --no-fail-on-empty-changeset
-
-      - name: Write auth token SecureString
-        run: |
-          aws ssm put-parameter --name "/cloudmart/${{ env.ENVIRONMENT }}/auth/token" \
-            --type SecureString --value "${{ secrets.CLOUDMART_API_TOKEN }}" --overwrite
-
-      - name: Package schema-apply Lambda
-        run: |
-          mkdir -p build/schema-apply
-          pip install pymysql -t src/schema-apply/ --break-system-packages
-          cd src/schema-apply && zip -r ../../build/schema-apply.zip . && cd ../..
-          aws s3 cp build/schema-apply.zip s3://${{ env.LAMBDA_BUCKET }}/${{ env.ENVIRONMENT }}/schema-apply/schema-apply-${{ github.sha }}.zip
-
-      - name: Deploy schema-stack
-        run: |
-          aws cloudformation deploy \
-            --stack-name cloudmart-${{ env.ENVIRONMENT }}-schema \
-            --template-file cloudformation/schema-stack.yaml \
-            --parameter-overrides Environment=${{ env.ENVIRONMENT }} LambdaCodeKey=${{ env.ENVIRONMENT }}/schema-apply/schema-apply-${{ github.sha }}.zip \
-            --capabilities CAPABILITY_NAMED_IAM \
-            --no-fail-on-empty-changeset
-
-      - name: Apply RDS schema + sample data
-        run: |
-          aws lambda invoke --function-name cloudmart-${{ env.ENVIRONMENT }}-schema-apply \
-            --payload '{}' --cli-binary-format raw-in-base64-out schema-response.json
-          cat schema-response.json
-          python3 -c "
-          import json
-          body = json.load(open('schema-response.json'))
-          payload = json.loads(body['body'])
-          assert payload['success'] is True, f\"Schema apply failed: {payload}\"
-          print(f\"Schema applied: {payload['tables_applied']} tables.\")
-          "
-
-      - name: Package Product Lambda
-        run: |
-          mkdir -p build/product
-          cp -r src/shared src/product/
-          pip install pymysql -t src/product/ --break-system-packages
-          cd src/product && zip -r ../../build/product.zip . && cd ../..
-          aws s3 cp build/product.zip s3://${{ env.LAMBDA_BUCKET }}/${{ env.ENVIRONMENT }}/product/product-${{ github.sha }}.zip
-
-      - name: Deploy product-stack
-        run: |
-          aws cloudformation deploy \
-            --stack-name cloudmart-${{ env.ENVIRONMENT }}-product \
-            --template-file cloudformation/product-stack.yaml \
-            --parameter-overrides Environment=${{ env.ENVIRONMENT }} LambdaCodeKey=${{ env.ENVIRONMENT }}/product/product-${{ github.sha }}.zip \
-            --capabilities CAPABILITY_NAMED_IAM \
-            --no-fail-on-empty-changeset
-
-      # ---------- Smoke tests — the actual proof, not just a green pipeline ----------
-      - name: Read Product Function URL
-        id: outputs
-        run: |
-          PRODUCT_URL=$(aws cloudformation describe-stacks \
-            --stack-name cloudmart-${{ env.ENVIRONMENT }}-product \
-            --query "Stacks[0].Outputs[?OutputKey=='ProductFunctionUrl'].OutputValue" --output text)
-          echo "product_url=$PRODUCT_URL" >> "$GITHUB_OUTPUT"
-
-      - name: Smoke test — no token returns 401
-        run: |
-          STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${{ steps.outputs.outputs.product_url }}products")
-          test "$STATUS" -eq 401
-
-      - name: Smoke test — wrong token returns 401
-        run: |
-          STATUS=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer wrong-token" "${{ steps.outputs.outputs.product_url }}products")
-          test "$STATUS" -eq 401
-
-      - name: Smoke test — correct token returns 200
-        run: |
-          STATUS=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${{ secrets.CLOUDMART_API_TOKEN }}" "${{ steps.outputs.outputs.product_url }}products")
-          test "$STATUS" -eq 200
-
-      - name: Deployment result
-        if: always()
-        run: echo "Milestone 2 + 3 pipeline finished for commit ${{ github.sha }}."
+          echo "============================================"
+          echo "CloudMart Milestone 2 deployment status:"
+          echo "${{ job.status }}"
+          echo "Environment: $ENVIRONMENT"
+          echo "Region: $AWS_REGION"
+          echo "Commit: $GITHUB_SHA"
+          echo "============================================"
