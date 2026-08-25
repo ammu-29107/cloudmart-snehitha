@@ -40,7 +40,7 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Show AWS identity
+      - name: Verify AWS identity
         run: |
           echo "============================================================"
           echo "AWS IDENTITY"
@@ -49,23 +49,17 @@ jobs:
           aws sts get-caller-identity
 
           echo ""
-          echo "Region:"
+          echo "AWS Region:"
           echo "${AWS_REGION}"
 
-      - name: Validate network template
+      - name: Validate CloudFormation template
         run: |
           echo "============================================================"
-          echo "VALIDATING NETWORK CLOUDFORMATION TEMPLATE"
+          echo "VALIDATING NETWORK TEMPLATE"
           echo "============================================================"
 
-          echo "Template:"
-          echo "${TEMPLATE_FILE}"
-
-          echo ""
-          echo "Running CloudFormation validation..."
-
           aws cloudformation validate-template \
-            --template-body file://${TEMPLATE_FILE}
+            --template-body "file://${TEMPLATE_FILE}"
 
           echo ""
           echo "============================================================"
@@ -95,9 +89,9 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      # --------------------------------------------------------
-      # AWS IDENTITY
-      # --------------------------------------------------------
+      # ========================================================
+      # VERIFY AWS ACCESS
+      # ========================================================
 
       - name: Verify AWS identity
         run: |
@@ -108,17 +102,18 @@ jobs:
           aws sts get-caller-identity
 
           echo ""
-          echo "AWS Region:"
+          echo "Region:"
           echo "${AWS_REGION}"
 
-      # --------------------------------------------------------
-      # CHECK WHETHER STACK ALREADY EXISTS
-      # --------------------------------------------------------
+      # ========================================================
+      # CHECK / CLEAN ROLLBACK_COMPLETE
+      # ========================================================
 
-      - name: Check existing network stack
+      - name: Check existing CloudFormation stack
+        id: stack-check
         run: |
           echo "============================================================"
-          echo "CHECKING EXISTING CLOUDFORMATION STACK"
+          echo "CHECKING EXISTING NETWORK STACK"
           echo "============================================================"
 
           STATUS=$(aws cloudformation describe-stacks \
@@ -126,32 +121,99 @@ jobs:
             --query 'Stacks[0].StackStatus' \
             --output text 2>/dev/null || true)
 
-          if [ -z "$STATUS" ]; then
-            echo "Stack does not currently exist."
-            echo "CloudFormation will create:"
-            echo "  ${STACK_NAME}"
+          if [ -z "$STATUS" ] || [ "$STATUS" = "None" ]; then
+
+            echo "No existing stack found."
+            echo "A new stack will be created."
 
           else
-            echo "Existing stack found:"
-            echo "  ${STACK_NAME}"
 
+            echo "Existing stack found:"
+            echo "${STACK_NAME}"
+
+            echo ""
             echo "Current status:"
-            echo "  ${STATUS}"
+            echo "${STATUS}"
 
             if [ "$STATUS" = "ROLLBACK_COMPLETE" ]; then
-              echo ""
-              echo "WARNING:"
-              echo "Stack is in ROLLBACK_COMPLETE."
-              echo "It must be deleted before CloudFormation can create"
-              echo "the stack again."
 
+              echo ""
+              echo "============================================================"
+              echo "STACK IS IN ROLLBACK_COMPLETE"
+              echo "============================================================"
+
+              echo "Deleting failed stack..."
+
+              aws cloudformation delete-stack \
+                --stack-name "${STACK_NAME}"
+
+              echo ""
+              echo "Waiting for stack deletion..."
+
+              aws cloudformation wait stack-delete-complete \
+                --stack-name "${STACK_NAME}"
+
+              echo ""
+              echo "Failed stack deleted successfully."
+              echo "CloudFormation can now create a fresh stack."
+
+            elif [ "$STATUS" = "DELETE_IN_PROGRESS" ]; then
+
+              echo "Stack deletion already in progress."
+              echo "Waiting for deletion to complete..."
+
+              aws cloudformation wait stack-delete-complete \
+                --stack-name "${STACK_NAME}"
+
+            elif [ "$STATUS" = "CREATE_FAILED" ]; then
+
+              echo ""
+              echo "Stack is in CREATE_FAILED."
+              echo "Deleting failed stack..."
+
+              aws cloudformation delete-stack \
+                --stack-name "${STACK_NAME}"
+
+              aws cloudformation wait stack-delete-complete \
+                --stack-name "${STACK_NAME}"
+
+              echo "Failed stack deleted."
+
+            elif [ "$STATUS" = "UPDATE_ROLLBACK_COMPLETE" ]; then
+
+              echo ""
+              echo "Stack is in UPDATE_ROLLBACK_COMPLETE."
+              echo "It can normally be updated."
+
+            elif [ "$STATUS" = "UPDATE_ROLLBACK_FAILED" ]; then
+
+              echo ""
+              echo "ERROR:"
+              echo "Stack is in UPDATE_ROLLBACK_FAILED."
+              echo ""
+              echo "Manual CloudFormation recovery is required."
               exit 1
+
+            elif [ "$STATUS" = "DELETE_COMPLETE" ]; then
+
+              echo "Stack is already deleted."
+
+            else
+
+              echo ""
+              echo "Stack is in status:"
+              echo "${STATUS}"
+
+              echo ""
+              echo "Proceeding with CloudFormation deployment."
+
             fi
+
           fi
 
-      # --------------------------------------------------------
+      # ========================================================
       # DEPLOY
-      # --------------------------------------------------------
+      # ========================================================
 
       - name: Deploy network stack
         run: |
@@ -176,7 +238,10 @@ jobs:
           echo "  ${TEMPLATE_FILE}"
 
           echo ""
-          echo "Resources being deployed:"
+          echo "============================================================"
+          echo "NETWORK RESOURCES"
+          echo "============================================================"
+
           echo "  - VPC"
           echo "  - Internet Gateway"
           echo "  - Public Subnet"
@@ -186,7 +251,6 @@ jobs:
           echo "  - Private Route Table"
           echo "  - Lambda Security Group"
           echo "  - RDS Security Group"
-          echo "  - EC2 Security Group"
           echo "  - VPC Endpoint Security Group"
           echo "  - S3 Gateway Endpoint"
           echo "  - SSM Interface Endpoint"
@@ -194,9 +258,9 @@ jobs:
           echo "  - SNS Interface Endpoint"
 
           echo ""
-          echo "No RDS instance is deployed by this job."
-          echo "No NAT Gateway is deployed."
-          echo "No application Lambda is deployed."
+          echo "No RDS instance is created by this stack."
+          echo "No Lambda function is created by this stack."
+          echo "No NAT Gateway is created by this stack."
 
           echo ""
           echo "============================================================"
@@ -210,9 +274,9 @@ jobs:
               Environment="${ENVIRONMENT}" \
             --no-fail-on-empty-changeset
 
-      # --------------------------------------------------------
-      # PRINT STACK STATUS
-      # --------------------------------------------------------
+      # ========================================================
+      # STACK STATUS
+      # ========================================================
 
       - name: Print stack status
         if: always()
@@ -226,9 +290,9 @@ jobs:
             --query 'Stacks[0].{StackName:StackName,Status:StackStatus}' \
             --output table || true
 
-      # --------------------------------------------------------
-      # PRINT STACK OUTPUTS
-      # --------------------------------------------------------
+      # ========================================================
+      # STACK OUTPUTS
+      # ========================================================
 
       - name: Print network stack outputs
         if: success()
@@ -242,11 +306,27 @@ jobs:
             --query 'Stacks[0].Outputs[*].{Export:ExportName,Key:OutputKey,Value:OutputValue}' \
             --output table
 
-      # --------------------------------------------------------
-      # PRINT CLOUDFORMATION EVENTS IF DEPLOYMENT FAILS
-      # --------------------------------------------------------
+      # ========================================================
+      # EXPORT VERIFICATION
+      # ========================================================
 
-      - name: Show failed CloudFormation events
+      - name: Verify CloudFormation exports
+        if: success()
+        run: |
+          echo "============================================================"
+          echo "VERIFYING CLOUDFORMATION EXPORTS"
+          echo "============================================================"
+
+          aws cloudformation list-exports \
+            --region "${AWS_REGION}" \
+            --query "Exports[?starts_with(Name, 'cloudmart-${ENVIRONMENT}-')].[Name,Value]" \
+            --output table
+
+      # ========================================================
+      # FAILED EVENTS
+      # ========================================================
+
+      - name: Show CloudFormation failure events
         if: failure()
         run: |
           echo "============================================================"
@@ -254,7 +334,7 @@ jobs:
           echo "============================================================"
 
           echo ""
-          echo "CloudFormation events:"
+          echo "Failed CloudFormation events:"
           echo ""
 
           aws cloudformation describe-stack-events \
@@ -271,9 +351,9 @@ jobs:
             --max-items 20 \
             --output table || true
 
-      # --------------------------------------------------------
-      # PRINT SUCCESS
-      # --------------------------------------------------------
+      # ========================================================
+      # SUCCESS
+      # ========================================================
 
       - name: Network deployment successful
         if: success()
@@ -299,8 +379,8 @@ jobs:
           echo "  ${ENVIRONMENT}"
 
           echo ""
-          echo "The exported network resources are ready for"
-          echo "the subsequent CloudMart infrastructure stacks."
+          echo "CloudFormation exports are available for"
+          echo "subsequent CloudMart infrastructure stacks."
 
           echo ""
           echo "################################################################"
