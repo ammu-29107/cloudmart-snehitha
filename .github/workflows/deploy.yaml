@@ -1,25 +1,11 @@
-name: CloudMart Milestone 2 Deploy
+name: CloudMart - Milestone 2 Network Deployment
 
 on:
   push:
-    branches: [main]
-    paths:
-      - 'cloudformation/**'
-      - 'lambda/**'
-      - 'scripts/**'
-      - 'sql/**'
-      - '.github/workflows/deploy.yaml'
+    branches:
+      - main
 
   workflow_dispatch:
-    inputs:
-      environment:
-        description: Deployment environment
-        required: true
-        default: dev
-        type: choice
-        options:
-          - dev
-          - prod
 
 permissions:
   id-token: write
@@ -27,31 +13,52 @@ permissions:
 
 env:
   AWS_REGION: ap-south-1
-  ENVIRONMENT: ${{ github.event.inputs.environment || 'dev' }}
+  ENVIRONMENT: dev
+  NETWORK_STACK_NAME: cloudmart-dev-network
+
+# ============================================================
+# MILESTONE 2 DEPLOYMENT ORDER
+#
+# Job 1 -> Validate Network Stack
+# Job 2 -> Deploy Network Stack
+# Job 3 -> Verify Network Stack
+#
+# FOR NOW, ONLY THE NETWORK STACK IS DEPLOYED.
+#
+# Future order:
+#
+# network
+#   ↓
+# database
+#   ↓
+# storage
+#   ↓
+# messaging
+#   ↓
+# IAM
+#   ↓
+# connectivity test
+#   ↓
+# application infrastructure
+#
+# ============================================================
 
 jobs:
-  deploy:
+
+  # ==========================================================
+  # JOB 1 — VALIDATE NETWORK STACK
+  # ==========================================================
+
+  validate-network:
+    name: Validate Network Stack
     runs-on: ubuntu-latest
 
     steps:
 
-      # ------------------------------------------------------------
-      # SOURCE
-      # ------------------------------------------------------------
-
       - name: Checkout source
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      # ------------------------------------------------------------
-      # AWS AUTHENTICATION
-      # ------------------------------------------------------------
-
-      - name: Configure AWS credentials through GitHub OIDC
+      - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
@@ -59,55 +66,123 @@ jobs:
 
       - name: Verify AWS identity
         run: |
+          echo "AWS Region: $AWS_REGION"
           aws sts get-caller-identity
 
-      # ------------------------------------------------------------
-      # VALIDATION
-      # ------------------------------------------------------------
-
-      - name: Validate CloudFormation templates
-        run: |
-          for tpl in cloudformation/*.yaml; do
-            echo "============================================"
-            echo "Validating $tpl"
-            echo "============================================"
-
-            aws cloudformation validate-template \
-              --template-body "file://$tpl" >/dev/null
-
-            echo "$tpl validated successfully."
-          done
-
-      - name: Compile Python sources
-        run: |
-          python -m compileall lambda
-
-      - name: Validate deployment script
-        run: |
-          bash -n scripts/deploy.sh
-          bash -n scripts/validate.sh
-
-      # ------------------------------------------------------------
-      # MILESTONE 2 DEPLOYMENT
-      # ------------------------------------------------------------
-
-      - name: Deploy Milestone 2 infrastructure
-        env:
-          AUTH_TOKEN: ${{ secrets.CLOUDMART_AUTH_TOKEN }}
-        run: |
-          bash scripts/deploy.sh "$ENVIRONMENT"
-
-      # ------------------------------------------------------------
-      # FINAL RESULT
-      # ------------------------------------------------------------
-
-      - name: Publish deployment result
-        if: always()
+      - name: Validate network-stack.yaml
         run: |
           echo "============================================"
-          echo "CloudMart Milestone 2 deployment status:"
-          echo "${{ job.status }}"
-          echo "Environment: $ENVIRONMENT"
+          echo "Validating network stack"
+          echo "============================================"
+
+          aws cloudformation validate-template \
+            --template-body file://cloudformation/network-stack.yaml
+
+          echo "============================================"
+          echo "Network stack YAML is valid."
+          echo "============================================"
+
+
+  # ==========================================================
+  # JOB 2 — DEPLOY NETWORK STACK
+  # ==========================================================
+
+  deploy-network:
+    name: Deploy Network Stack
+    runs-on: ubuntu-latest
+
+    needs:
+      - validate-network
+
+    steps:
+
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Verify AWS identity
+        run: |
+          echo "AWS Region: $AWS_REGION"
+          aws sts get-caller-identity
+
+      - name: Deploy network stack
+        run: |
+          echo "============================================"
+          echo "Deploying CloudMart Network Stack"
           echo "Region: $AWS_REGION"
-          echo "Commit: $GITHUB_SHA"
+          echo "Environment: $ENVIRONMENT"
+          echo "Stack: $NETWORK_STACK_NAME"
+          echo "============================================"
+
+          aws cloudformation deploy \
+            --stack-name "$NETWORK_STACK_NAME" \
+            --template-file cloudformation/network-stack.yaml \
+            --parameter-overrides \
+              Environment="$ENVIRONMENT" \
+            --no-fail-on-empty-changeset
+
+          echo "============================================"
+          echo "Network stack deployment completed."
+          echo "============================================"
+
+
+  # ==========================================================
+  # JOB 3 — VERIFY NETWORK STACK
+  # ==========================================================
+
+  verify-network:
+    name: Verify Network Stack
+    runs-on: ubuntu-latest
+
+    needs:
+      - deploy-network
+
+    steps:
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Verify stack status
+        run: |
+          echo "============================================"
+          echo "Checking CloudFormation stack"
+          echo "============================================"
+
+          STATUS=$(aws cloudformation describe-stacks \
+            --stack-name "$NETWORK_STACK_NAME" \
+            --query "Stacks[0].StackStatus" \
+            --output text)
+
+          echo "Stack status: $STATUS"
+
+          if [[ "$STATUS" != "CREATE_COMPLETE" && \
+                "$STATUS" != "UPDATE_COMPLETE" ]]; then
+            echo "Network stack is not in a successful state."
+            exit 1
+          fi
+
+          echo "Network stack is successfully deployed."
+
+
+      - name: Display network outputs
+        run: |
+          echo "============================================"
+          echo "CloudMart Network Stack Outputs"
+          echo "============================================"
+
+          aws cloudformation describe-stacks \
+            --stack-name "$NETWORK_STACK_NAME" \
+            --query "Stacks[0].Outputs[*].[OutputKey,OutputValue]" \
+            --output table
+
+          echo "============================================"
+          echo "Network deployment verified."
           echo "============================================"
