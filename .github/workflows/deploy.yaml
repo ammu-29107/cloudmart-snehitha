@@ -12,17 +12,21 @@ permissions:
 
 env:
   AWS_REGION: ap-south-1
-  STACK_NAME: cloudmart-network-stack
   ENVIRONMENT: dev
-  NETWORK_TEMPLATE: cloudformation/network-stack.yaml
+  STACK_NAME: cloudmart-network-stack
+  TEMPLATE_FILE: cloudformation/network-stack.yaml
+
 
 jobs:
 
   # ============================================================
-  # JOB 1 — CHECK AWS ACCESS
+  # JOB 1 — AWS ACCESS CHECK
   # ============================================================
+
   aws-access-check:
-    name: 1. Verify AWS Access
+
+    name: 1. AWS Access Check
+
     runs-on: ubuntu-latest
 
     steps:
@@ -38,28 +42,38 @@ jobs:
 
       - name: Verify AWS identity
         run: |
+
           echo "============================================================"
           echo "AWS ACCESS CHECK"
           echo "============================================================"
 
-          echo "Region:"
-          echo "${AWS_REGION}"
+          echo ""
+          echo "AWS Region:"
+          echo "  $AWS_REGION"
 
           echo ""
-          echo "GitHub Actions is authenticated as:"
+          echo "CloudFormation Stack:"
+          echo "  $STACK_NAME"
+
+          echo ""
+          echo "AWS Identity:"
           aws sts get-caller-identity
 
           echo ""
-          echo "AWS access successfully verified."
+          echo "AWS access verified."
           echo "============================================================"
 
 
   # ============================================================
-  # JOB 2 — VALIDATE NETWORK TEMPLATE
+  # JOB 2 — VALIDATE TEMPLATE
   # ============================================================
+
   validate-network-template:
+
     name: 2. Validate Network Template
+
     needs: aws-access-check
+
     runs-on: ubuntu-latest
 
     steps:
@@ -75,39 +89,42 @@ jobs:
 
       - name: Validate CloudFormation template
         run: |
+
           echo "============================================================"
           echo "CLOUDFORMATION TEMPLATE VALIDATION"
           echo "============================================================"
 
-          echo "Region:"
-          echo "${AWS_REGION}"
-
           echo ""
-          echo "Stack:"
-          echo "${STACK_NAME}"
+          echo "Region:"
+          echo "  $AWS_REGION"
 
           echo ""
           echo "Template:"
-          echo "${NETWORK_TEMPLATE}"
+          echo "  $TEMPLATE_FILE"
 
           echo ""
-          echo "Validating template..."
+          echo "Running CloudFormation validation..."
 
           aws cloudformation validate-template \
-            --template-body file://${NETWORK_TEMPLATE}
+            --region "$AWS_REGION" \
+            --template-body "file://$TEMPLATE_FILE"
 
           echo ""
           echo "============================================================"
-          echo "NETWORK TEMPLATE VALIDATION SUCCESSFUL"
+          echo "TEMPLATE VALIDATION SUCCESSFUL"
           echo "============================================================"
 
 
   # ============================================================
   # JOB 3 — DEPLOY NETWORK STACK
   # ============================================================
+
   deploy-network:
+
     name: 3. Deploy Network Stack
+
     needs: validate-network-template
+
     runs-on: ubuntu-latest
 
     steps:
@@ -122,238 +139,287 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       # --------------------------------------------------------
-      # Display deployment information
+      # Show deployment plan
       # --------------------------------------------------------
-      - name: Display deployment configuration
+
+      - name: Display network deployment plan
         run: |
+
           echo "################################################################"
-          echo "#              STARTING NETWORK DEPLOYMENT                   #"
+          echo "#              NETWORK DEPLOYMENT STARTING                    #"
           echo "################################################################"
 
           echo ""
           echo "AWS Region:"
-          echo "  ${AWS_REGION}"
+          echo "  $AWS_REGION"
 
           echo ""
           echo "Environment:"
-          echo "  ${ENVIRONMENT}"
+          echo "  $ENVIRONMENT"
 
           echo ""
           echo "CloudFormation Stack:"
-          echo "  ${STACK_NAME}"
+          echo "  $STACK_NAME"
 
           echo ""
-          echo "Template:"
-          echo "  ${NETWORK_TEMPLATE}"
+          echo "CloudFormation Template:"
+          echo "  $TEMPLATE_FILE"
 
           echo ""
-          echo "Resources expected:"
-          echo "  - VPC"
-          echo "  - Internet Gateway"
-          echo "  - Public Subnet"
-          echo "  - Private Subnet A"
-          echo "  - Private Subnet B"
-          echo "  - Public Route Table"
-          echo "  - Private Route Table"
-          echo "  - Lambda Security Group"
-          echo "  - RDS Security Group"
-          echo "  - EC2 Security Group"
-          echo "  - VPC Endpoint Security Group"
-          echo "  - S3 Gateway Endpoint"
-          echo "  - SSM Interface Endpoint"
-          echo "  - EventBridge Interface Endpoint"
-          echo "  - SNS Interface Endpoint"
-          echo "  - SQS Interface Endpoint"
+          echo "Resources to be created:"
+          echo ""
+          echo "  1. VPC"
+          echo "  2. Internet Gateway"
+          echo "  3. Public Subnet"
+          echo "  4. Private Subnet A"
+          echo "  5. Private Subnet B"
+          echo "  6. Public Route Table"
+          echo "  7. Private Route Table"
+          echo "  8. Lambda Security Group"
+          echo "  9. RDS Security Group"
+          echo " 10. EC2 Security Group"
+          echo " 11. VPC Endpoint Security Group"
+          echo " 12. S3 Gateway Endpoint"
+          echo " 13. SSM Interface Endpoint"
+          echo " 14. EventBridge Interface Endpoint"
+          echo " 15. SNS Interface Endpoint"
+          echo " 16. SQS Interface Endpoint"
+
+          echo ""
+          echo "Expected CloudFormation exports:"
+          echo ""
+          echo "  - cloudmart-dev-vpc-id"
+          echo "  - cloudmart-dev-public-subnet"
+          echo "  - cloudmart-dev-private-subnet-a"
+          echo "  - cloudmart-dev-private-subnet-b"
+          echo "  - cloudmart-dev-sg-lambda"
+          echo "  - cloudmart-dev-sg-rds"
+          echo "  - cloudmart-dev-sg-ec2"
+          echo "  - cloudmart-dev-sg-vpce"
 
           echo ""
           echo "################################################################"
 
 
       # --------------------------------------------------------
-      # Check whether a previous failed stack exists
+      # Check whether old stack exists
       # --------------------------------------------------------
-      - name: Check existing CloudFormation stack
+
+      - name: Check existing stack
         id: stack-check
         run: |
+
           echo "============================================================"
-          echo "CHECKING EXISTING CLOUDFORMATION STACK"
+          echo "CHECKING EXISTING STACK"
           echo "============================================================"
 
           STATUS=$(aws cloudformation describe-stacks \
-            --stack-name "${STACK_NAME}" \
+            --region "$AWS_REGION" \
+            --stack-name "$STACK_NAME" \
             --query "Stacks[0].StackStatus" \
             --output text 2>/dev/null || echo "DOES_NOT_EXIST")
 
           echo ""
-          echo "Current stack status:"
-          echo "  ${STATUS}"
+          echo "Stack status:"
+          echo "  $STATUS"
 
-          echo "status=${STATUS}" >> "$GITHUB_OUTPUT"
+          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+
 
       # --------------------------------------------------------
-      # Delete ROLLBACK_COMPLETE stack
-      #
-      # A stack in ROLLBACK_COMPLETE cannot be updated.
-      # It must be deleted before recreating it.
+      # Delete failed stack
       # --------------------------------------------------------
-      - name: Remove failed stack if required
+
+      - name: Delete previous ROLLBACK_COMPLETE stack
         if: steps.stack-check.outputs.status == 'ROLLBACK_COMPLETE'
         run: |
+
           echo "============================================================"
-          echo "PREVIOUS DEPLOYMENT FAILED"
+          echo "REMOVING PREVIOUS FAILED STACK"
           echo "============================================================"
 
           echo ""
-          echo "Stack is in ROLLBACK_COMPLETE."
+          echo "The stack is in ROLLBACK_COMPLETE."
+
           echo "CloudFormation cannot update a stack in this state."
 
           echo ""
-          echo "Deleting previous failed stack:"
-          echo "  ${STACK_NAME}"
+          echo "Deleting:"
+          echo "  $STACK_NAME"
 
           aws cloudformation delete-stack \
-            --stack-name "${STACK_NAME}"
+            --region "$AWS_REGION" \
+            --stack-name "$STACK_NAME"
 
           echo ""
-          echo "Waiting for failed stack to be deleted..."
+          echo "Waiting for deletion..."
 
           aws cloudformation wait stack-delete-complete \
-            --stack-name "${STACK_NAME}"
+            --region "$AWS_REGION" \
+            --stack-name "$STACK_NAME"
 
           echo ""
-          echo "Previous failed stack successfully removed."
+          echo "Previous failed stack deleted."
+
 
       # --------------------------------------------------------
-      # Deploy CloudFormation network stack
+      # Deploy
       # --------------------------------------------------------
-      - name: Deploy network CloudFormation stack
+
+      - name: Deploy CloudFormation network stack
+        id: deploy
         run: |
+
           echo "============================================================"
           echo "DEPLOYING NETWORK CLOUDFORMATION STACK"
           echo "============================================================"
 
           echo ""
           echo "Region:"
-          echo "  ${AWS_REGION}"
+          echo "  $AWS_REGION"
 
           echo ""
           echo "Stack:"
-          echo "  ${STACK_NAME}"
+          echo "  $STACK_NAME"
 
           echo ""
-          echo "Starting CloudFormation deployment..."
+          echo "Template:"
+          echo "  $TEMPLATE_FILE"
+
+          echo ""
+          echo "Creating/updating CloudFormation stack..."
+
+          set +e
 
           aws cloudformation deploy \
-            --stack-name "${STACK_NAME}" \
-            --template-file "${NETWORK_TEMPLATE}" \
+            --region "$AWS_REGION" \
+            --stack-name "$STACK_NAME" \
+            --template-file "$TEMPLATE_FILE" \
             --parameter-overrides \
-              Environment="${ENVIRONMENT}" \
-            --capabilities CAPABILITY_NAMED_IAM \
+              Environment="$ENVIRONMENT" \
             --no-fail-on-empty-changeset
 
+          DEPLOY_EXIT_CODE=$?
+
+          set -e
+
           echo ""
-          echo "CloudFormation deployment command completed."
+          echo "CloudFormation deployment exit code:"
+          echo "  $DEPLOY_EXIT_CODE"
+
+          if [ "$DEPLOY_EXIT_CODE" -ne 0 ]; then
+
+            echo ""
+            echo "################################################################"
+            echo "#             NETWORK DEPLOYMENT FAILED                      #"
+            echo "################################################################"
+
+            echo ""
+            echo "CloudFormation resource failure details:"
+            echo ""
+
+            aws cloudformation describe-stack-events \
+              --region "$AWS_REGION" \
+              --stack-name "$STACK_NAME" \
+              --query "StackEvents[?ResourceStatus=='CREATE_FAILED' || ResourceStatus=='UPDATE_FAILED' || ResourceStatus=='DELETE_FAILED'].[Timestamp,LogicalResourceId,ResourceType,ResourceStatus,ResourceStatusReason]" \
+              --output table || true
+
+            echo ""
+            echo "Recent CloudFormation events:"
+            echo ""
+
+            aws cloudformation describe-stack-events \
+              --region "$AWS_REGION" \
+              --stack-name "$STACK_NAME" \
+              --query "StackEvents[0:20].[Timestamp,LogicalResourceId,ResourceStatus,ResourceStatusReason]" \
+              --output table || true
+
+            echo ""
+            echo "Current stack status:"
+            echo ""
+
+            aws cloudformation describe-stacks \
+              --region "$AWS_REGION" \
+              --stack-name "$STACK_NAME" \
+              --query "Stacks[0].[StackName,StackStatus,StackStatusReason]" \
+              --output table || true
+
+            echo ""
+            echo "################################################################"
+            echo "#             END OF FAILURE DIAGNOSTICS                     #"
+            echo "################################################################"
+
+            exit "$DEPLOY_EXIT_CODE"
+
+          fi
+
+          echo ""
+          echo "CloudFormation deployment completed successfully."
+
 
       # --------------------------------------------------------
-      # Display stack status
+      # Show resources
       # --------------------------------------------------------
-      - name: Show stack status
-        run: |
-          echo "============================================================"
-          echo "CLOUDFORMATION STACK STATUS"
-          echo "============================================================"
 
-          aws cloudformation describe-stacks \
-            --stack-name "${STACK_NAME}" \
-            --query "Stacks[0].[StackName,StackStatus,CreationTime,LastUpdatedTime]" \
-            --output table
-
-      # --------------------------------------------------------
-      # Display CloudFormation resources
-      # --------------------------------------------------------
       - name: Show deployed resources
         run: |
+
           echo "============================================================"
-          echo "DEPLOYED NETWORK RESOURCES"
+          echo "NETWORK STACK RESOURCES"
           echo "============================================================"
 
           aws cloudformation list-stack-resources \
-            --stack-name "${STACK_NAME}" \
+            --region "$AWS_REGION" \
+            --stack-name "$STACK_NAME" \
             --query "StackResourceSummaries[*].[LogicalResourceId,ResourceType,ResourceStatus]" \
             --output table
 
+
       # --------------------------------------------------------
-      # Display CloudFormation exports
+      # Show outputs
       # --------------------------------------------------------
-      - name: Show network stack exports
+
+      - name: Show stack outputs
         run: |
-          echo "============================================================"
-          echo "NETWORK STACK EXPORTS"
-          echo "============================================================"
 
-          echo ""
-          echo "These exported values will be consumed by"
-          echo "the remaining CloudMart CloudFormation stacks."
-          echo ""
-
-          aws cloudformation list-exports \
-            --region "${AWS_REGION}" \
-            --query "Exports[?starts_with(Name, 'cloudmart-dev-')].[Name,Value]" \
-            --output table
-
-      # --------------------------------------------------------
-      # Display important stack outputs
-      # --------------------------------------------------------
-      - name: Show network stack outputs
-        run: |
           echo "============================================================"
           echo "NETWORK STACK OUTPUTS"
           echo "============================================================"
 
           aws cloudformation describe-stacks \
-            --stack-name "${STACK_NAME}" \
-            --query "Stacks[0].Outputs[*].[OutputKey,OutputValue,Description]" \
+            --region "$AWS_REGION" \
+            --stack-name "$STACK_NAME" \
+            --query "Stacks[0].Outputs[*].[OutputKey,OutputValue]" \
             --output table
 
+
       # --------------------------------------------------------
-      # Final success message
+      # Show exports
       # --------------------------------------------------------
-      - name: Network deployment success
+
+      - name: Show CloudFormation exports
         run: |
-          echo ""
-          echo "################################################################"
-          echo "#              NETWORK DEPLOYMENT SUCCESSFUL                  #"
-          echo "################################################################"
 
-          echo ""
-          echo "Stack:"
-          echo "  ${STACK_NAME}"
+          echo "============================================================"
+          echo "CLOUDFORMATION EXPORTS"
+          echo "============================================================"
 
-          echo ""
-          echo "Region:"
-          echo "  ${AWS_REGION}"
-
-          echo ""
-          echo "Environment:"
-          echo "  ${ENVIRONMENT}"
-
-          echo ""
-          echo "The network foundation is now deployed."
-
-          echo ""
-          echo "CloudFormation exports are available for"
-          echo "the database, storage, messaging and application stacks."
-
-          echo ""
-          echo "################################################################"
+          aws cloudformation list-exports \
+            --region "$AWS_REGION" \
+            --query "Exports[?starts_with(Name, 'cloudmart-dev-')].[Name,Value]" \
+            --output table
 
 
   # ============================================================
-  # JOB 4 — VERIFY NETWORK STACK
+  # JOB 4 — FINAL VERIFICATION
   # ============================================================
+
   verify-network:
+
     name: 4. Verify Network Stack
+
     needs: deploy-network
+
     runs-on: ubuntu-latest
 
     steps:
@@ -364,24 +430,30 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Verify final stack state
+      - name: Verify final stack
         run: |
-          echo "============================================================"
-          echo "FINAL NETWORK STACK VERIFICATION"
-          echo "============================================================"
+
+          echo "################################################################"
+          echo "#              FINAL NETWORK VERIFICATION                    #"
+          echo "################################################################"
 
           STATUS=$(aws cloudformation describe-stacks \
-            --stack-name "${STACK_NAME}" \
+            --region "$AWS_REGION" \
+            --stack-name "$STACK_NAME" \
             --query "Stacks[0].StackStatus" \
             --output text)
 
           echo ""
           echo "Stack:"
-          echo "  ${STACK_NAME}"
+          echo "  $STACK_NAME"
+
+          echo ""
+          echo "Region:"
+          echo "  $AWS_REGION"
 
           echo ""
           echo "Final status:"
-          echo "  ${STATUS}"
+          echo "  $STATUS"
 
           if [ "$STATUS" != "CREATE_COMPLETE" ] && \
              [ "$STATUS" != "UPDATE_COMPLETE" ]; then
@@ -392,16 +464,15 @@ jobs:
           fi
 
           echo ""
-          echo "Network stack verification successful."
-
+          echo "CloudFormation exports:"
           echo ""
-          echo "Available exports:"
+
           aws cloudformation list-exports \
-            --region "${AWS_REGION}" \
+            --region "$AWS_REGION" \
             --query "Exports[?starts_with(Name, 'cloudmart-dev-')].[Name,Value]" \
             --output table
 
           echo ""
-          echo "============================================================"
-          echo "NETWORK FOUNDATION READY"
-          echo "============================================================"
+          echo "################################################################"
+          echo "#              NETWORK STACK READY                           #"
+          echo "################################################################"
