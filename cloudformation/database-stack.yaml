@@ -1,0 +1,60 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  CloudMart database-stack — RDS MySQL, single-AZ, in private subnet A.
+  The DB subnet group references both private subnets because AWS
+  requires at least two AZs on a subnet group even for a single-AZ
+  instance; private subnet B never hosts the live instance itself.
+  Uses ManageMasterUserPassword so AWS generates and stores the
+  password in Secrets Manager under an AWS-managed key — no password
+  is ever typed, committed, or stored as a GitHub secret.
+
+Parameters:
+  Environment:
+    Type: String
+    AllowedValues: [dev, prod]
+  DbInstanceClass:
+    Type: String
+    Default: db.t3.micro
+
+Resources:
+
+  DbSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: !Sub cloudmart-${Environment}-db-subnet-group
+      SubnetIds:
+        - Fn::ImportValue: !Sub cloudmart-${Environment}-private-subnet-a
+        - Fn::ImportValue: !Sub cloudmart-${Environment}-private-subnet-b
+
+  RdsInstance:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Snapshot
+    Properties:
+      DBInstanceIdentifier: !Sub cloudmart-${Environment}-mysql
+      Engine: mysql
+      EngineVersion: '8.0'
+      DBInstanceClass: !Ref DbInstanceClass
+      AllocatedStorage: '20'
+      StorageType: gp2
+      DBName: cloudmart
+      MasterUsername: cloudmart_admin
+      ManageMasterUserPassword: true
+      MultiAZ: false
+      DBSubnetGroupName: !Ref DbSubnetGroup
+      VPCSecurityGroups:
+        - Fn::ImportValue: !Sub cloudmart-${Environment}-sg-rds
+      PubliclyAccessible: false
+      StorageEncrypted: true
+      BackupRetentionPeriod: 7
+
+Outputs:
+  RdsEndpointAddress:
+    Value: !GetAtt RdsInstance.Endpoint.Address
+    Export: {Name: !Sub 'cloudmart-${Environment}-rds-endpoint'}
+  RdsEndpointPort:
+    Value: !GetAtt RdsInstance.Endpoint.Port
+    Export: {Name: !Sub 'cloudmart-${Environment}-rds-port'}
+  RdsSecretArn:
+    Value: !GetAtt RdsInstance.MasterUserSecret.SecretArn
+    Description: Secrets Manager ARN holding the generated master password — the pipeline reads this to seed SSM
+    Export: {Name: !Sub 'cloudmart-${Environment}-rds-secret-arn'}

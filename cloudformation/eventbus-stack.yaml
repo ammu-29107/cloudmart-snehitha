@@ -1,0 +1,58 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  CloudMart eventbus-stack — the shared EventBridge bus every Lambda
+  publishes to. Includes one verification rule that routes LowStockEvents
+  to a CloudWatch Logs group, so "EventBridge rule firing on inventory
+  change events" (Milestone 3) is something you can actually point at
+  and show, not just an unobserved PutEvents call.
+
+Parameters:
+  Environment:
+    Type: String
+
+Resources:
+  EventBus:
+    Type: AWS::Events::EventBus
+    Properties:
+      Name: !Sub cloudmart-${Environment}-bus
+
+  LowStockLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /cloudmart/${Environment}/events/low-stock
+      RetentionInDays: 14
+
+  LowStockRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub cloudmart-${Environment}-low-stock-rule
+      EventBusName: !Ref EventBus
+      EventPattern:
+        source: ["cloudmart.product"]
+        detail-type: ["LowStockEvents"]
+      Targets:
+        - Id: LowStockToLogs
+          Arn: !GetAtt LowStockLogGroup.Arn
+
+  LowStockLogGroupPolicy:
+    Type: AWS::Logs::ResourcePolicy
+    Properties:
+      PolicyName: !Sub cloudmart-${Environment}-eventbridge-to-logs
+      PolicyDocument: !Sub |
+        {
+          "Version": "2012-10-17",
+          "Statement": [{
+            "Effect": "Allow",
+            "Principal": {"Service": "events.amazonaws.com"},
+            "Action": "logs:PutLogEvents",
+            "Resource": "${LowStockLogGroup.Arn}"
+          }]
+        }
+
+Outputs:
+  EventBusArn:
+    Value: !GetAtt EventBus.Arn
+    Export: {Name: !Sub 'cloudmart-${Environment}-eventbus-arn'}
+  EventBusName:
+    Value: !Ref EventBus
+    Export: {Name: !Sub 'cloudmart-${Environment}-eventbus-name'}
