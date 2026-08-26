@@ -8,6 +8,7 @@ on:
       - 'cloudformation/database-stack.yaml'
       - 'cloudformation/storage-stack.yaml'
       - 'cloudformation/eventbus-stack.yaml'
+      - '.github/workflows/deploy.yaml'
   workflow_dispatch:
 
 permissions:
@@ -15,15 +16,17 @@ permissions:
   contents: read
 
 jobs:
-  deploy:
+
+  # ═══════════════════════════════════════════════════════
+  # JOB 0: Validate every template before touching AWS
+  # ═══════════════════════════════════════════════════════
+  validate-templates:
+    name: Validate Templates
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
 
-      - name: Checkout source
-        uses: actions/checkout@v4
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+      - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ secrets.AWS_REGION }}
@@ -31,119 +34,382 @@ jobs:
       - name: Verify identity
         run: aws sts get-caller-identity
 
-      - name: Validate all templates
+      - name: Validate all four templates
         run: |
           for tpl in cloudformation/network-stack.yaml cloudformation/database-stack.yaml cloudformation/storage-stack.yaml cloudformation/eventbus-stack.yaml; do
             echo "Validating $tpl"
+            test -s "$tpl" || { echo "ERROR: $tpl is empty (0 bytes). Fix the file content before re-running."; exit 1; }
             aws cloudformation validate-template --template-body file://$tpl
           done
 
-      # ---------- network-stack (already confirmed working, kept idempotent) ----------
-      - name: Deploy network-stack
-        run: |
-          aws cloudformation deploy \
-            --stack-name cloudmart-dev-network \
-            --template-file cloudformation/network-stack.yaml \
-            --parameter-overrides Environment=dev \
-            --capabilities CAPABILITY_NAMED_IAM \
-            --no-fail-on-empty-changeset
+  # ═══════════════════════════════════════════════════════
+  # JOB 1: network-stack
+  # ═══════════════════════════════════════════════════════
+  deploy-network:
+    name: Deploy network-stack
+    runs-on: ubuntu-latest
+    needs: validate-templates
+    env:
+      STACK_NAME: cloudmart-dev-network
+      TEMPLATE_FILE: cloudformation/network-stack.yaml
+      CHANGESET_NAME: cs-network-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@v4
 
-      # ---------- database-stack ----------
-      - name: Deploy database-stack
-        run: |
-          aws cloudformation deploy \
-            --stack-name cloudmart-dev-database \
-            --template-file cloudformation/database-stack.yaml \
-            --parameter-overrides Environment=dev \
-            --capabilities CAPABILITY_NAMED_IAM \
-            --no-fail-on-empty-changeset
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
 
-      - name: Confirm database-stack reached a healthy state
+      - name: Determine change set type (CREATE vs UPDATE)
+        id: stack-check
         run: |
-          STATUS=$(aws cloudformation describe-stacks \
-            --stack-name cloudmart-dev-database \
-            --query "Stacks[0].StackStatus" --output text)
-          echo "Stack status: $STATUS"
-          if [[ "$STATUS" != "CREATE_COMPLETE" && "$STATUS" != "UPDATE_COMPLETE" ]]; then
-            echo "database-stack did not reach a healthy state."
-            exit 1
+          if aws cloudformation describe-stacks --stack-name "$STACK_NAME" >/dev/null 2>&1; then
+            echo "changeset_type=UPDATE" >> "$GITHUB_OUTPUT"
+          else
+            echo "changeset_type=CREATE" >> "$GITHUB_OUTPUT"
           fi
 
-      # ---------- Bridge: move the RDS-generated password into SSM ----------
-      # AWS::SSM::Parameter cannot create a SecureString directly — this is a
-      # real CloudFormation limitation, not a workaround for convenience.
+      - name: Create change set
+        run: |
+          aws cloudformation create-change-set \
+            --stack-name "$STACK_NAME" \
+            --change-set-name "$CHANGESET_NAME" \
+            --change-set-type "${{ steps.stack-check.outputs.changeset_type }}" \
+            --template-body "file://$TEMPLATE_FILE" \
+            --parameters ParameterKey=Environment,ParameterValue=dev \
+            --capabilities CAPABILITY_NAMED_IAM
+
+      - name: Wait for change set to be ready
+        run: |
+          for i in $(seq 1 20); do
+            STATUS=$(aws cloudformation describe-change-set --stack-name "$STACK_NAME" --change-set-name "$CHANGESET_NAME" --query 'Status' --output text)
+            REASON=$(aws cloudformation describe-change-set --stack-name "$STACK_NAME" --change-set-name "$CHANGESET_NAME" --query 'StatusReason' --output text)
+            echo "Attempt $i/20 - Status: $STATUS"
+            if [ "$STATUS" = "CREATE_COMPLETE" ]; then
+              echo "ready=true" >> "$GITHUB_ENV"; break
+            elif [ "$STATUS" = "FAILED" ]; then
+              if echo "$REASON" | grep -qi "didn't contain changes\|No updates"; then
+                echo "No changes to deploy - nothing to execute."
+                echo "ready=nochange" >> "$GITHUB_ENV"; break
+              else
+                echo "Change set failed: $REASON"; exit 1
+              fi
+            else
+              sleep 15
+            fi
+          done
+
+      - name: Execute change set
+        if: env.ready == 'true'
+        run: aws cloudformation execute-change-set --stack-name "$STACK_NAME" --change-set-name "$CHANGESET_NAME"
+
+      - name: Wait for stack to stabilize
+        if: env.ready == 'true'
+        run: |
+          for i in $(seq 1 40); do
+            STATUS=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --query 'Stacks[0].StackStatus' --output text)
+            echo "Attempt $i/40 - Stack status: $STATUS"
+            case "$STATUS" in
+              CREATE_COMPLETE|UPDATE_COMPLETE) echo "Stack healthy."; exit 0 ;;
+              *IN_PROGRESS) sleep 30 ;;
+              *FAILED|*ROLLBACK_COMPLETE)
+                echo "Stack failed with status: $STATUS"
+                echo "--- Recent stack events ---"
+                aws cloudformation describe-stack-events --stack-name "$STACK_NAME" \
+                  --query 'StackEvents[:15].{Time:Timestamp,Status:ResourceStatus,Resource:LogicalResourceId,Reason:ResourceStatusReason}' \
+                  --output table
+                exit 1 ;;
+              *) sleep 30 ;;
+            esac
+          done
+
+  # ═══════════════════════════════════════════════════════
+  # JOB 2: database-stack
+  # ═══════════════════════════════════════════════════════
+  deploy-database:
+    name: Deploy database-stack
+    runs-on: ubuntu-latest
+    needs: deploy-network
+    env:
+      STACK_NAME: cloudmart-dev-database
+      TEMPLATE_FILE: cloudformation/database-stack.yaml
+      CHANGESET_NAME: cs-database-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Determine change set type
+        id: stack-check
+        run: |
+          if aws cloudformation describe-stacks --stack-name "$STACK_NAME" >/dev/null 2>&1; then
+            echo "changeset_type=UPDATE" >> "$GITHUB_OUTPUT"
+          else
+            echo "changeset_type=CREATE" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create change set
+        run: |
+          aws cloudformation create-change-set \
+            --stack-name "$STACK_NAME" \
+            --change-set-name "$CHANGESET_NAME" \
+            --change-set-type "${{ steps.stack-check.outputs.changeset_type }}" \
+            --template-body "file://$TEMPLATE_FILE" \
+            --parameters ParameterKey=Environment,ParameterValue=dev ParameterKey=DbInstanceClass,ParameterValue=db.t3.micro \
+            --capabilities CAPABILITY_NAMED_IAM
+
+      - name: Wait for change set to be ready
+        run: |
+          for i in $(seq 1 20); do
+            STATUS=$(aws cloudformation describe-change-set --stack-name "$STACK_NAME" --change-set-name "$CHANGESET_NAME" --query 'Status' --output text)
+            REASON=$(aws cloudformation describe-change-set --stack-name "$STACK_NAME" --change-set-name "$CHANGESET_NAME" --query 'StatusReason' --output text)
+            echo "Attempt $i/20 - Status: $STATUS"
+            if [ "$STATUS" = "CREATE_COMPLETE" ]; then
+              echo "ready=true" >> "$GITHUB_ENV"; break
+            elif [ "$STATUS" = "FAILED" ]; then
+              if echo "$REASON" | grep -qi "didn't contain changes\|No updates"; then
+                echo "No changes to deploy."
+                echo "ready=nochange" >> "$GITHUB_ENV"; break
+              else
+                echo "Change set failed: $REASON"; exit 1
+              fi
+            else
+              sleep 15
+            fi
+          done
+
+      - name: Execute change set
+        if: env.ready == 'true'
+        run: aws cloudformation execute-change-set --stack-name "$STACK_NAME" --change-set-name "$CHANGESET_NAME"
+
+      # RDS provisioning is slow — this can genuinely take 5-10 minutes, unlike network-stack.
+      - name: Wait for stack to stabilize
+        if: env.ready == 'true'
+        run: |
+          for i in $(seq 1 60); do
+            STATUS=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --query 'Stacks[0].StackStatus' --output text)
+            echo "Attempt $i/60 - Stack status: $STATUS"
+            case "$STATUS" in
+              CREATE_COMPLETE|UPDATE_COMPLETE) echo "Stack healthy."; exit 0 ;;
+              *IN_PROGRESS) sleep 30 ;;
+              *FAILED|*ROLLBACK_COMPLETE)
+                echo "Stack failed with status: $STATUS"
+                echo "--- Recent stack events ---"
+                aws cloudformation describe-stack-events --stack-name "$STACK_NAME" \
+                  --query 'StackEvents[:15].{Time:Timestamp,Status:ResourceStatus,Resource:LogicalResourceId,Reason:ResourceStatusReason}' \
+                  --output table
+                exit 1 ;;
+              *) sleep 30 ;;
+            esac
+          done
+
+      # Bridge: AWS::SSM::Parameter cannot create a SecureString directly.
       # ManageMasterUserPassword put the real password in Secrets Manager;
-      # this step reads it once and writes it to the SSM path every Lambda
-      # will read from. The password is never echoed anywhere in this log.
+      # this reads it once and writes it into SSM. Never echoed anywhere.
       - name: Bridge RDS password into SSM
         run: |
-          SECRET_ARN=$(aws cloudformation describe-stacks \
-            --stack-name cloudmart-dev-database \
+          SECRET_ARN=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" \
             --query "Stacks[0].Outputs[?OutputKey=='RdsSecretArn'].OutputValue" --output text)
-
           DB_PASSWORD=$(aws secretsmanager get-secret-value --secret-id "$SECRET_ARN" \
             --query "SecretString" --output text | python3 -c "import sys,json; print(json.load(sys.stdin)['password'])")
-
-          RDS_HOST=$(aws cloudformation describe-stacks \
-            --stack-name cloudmart-dev-database \
+          RDS_HOST=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" \
             --query "Stacks[0].Outputs[?OutputKey=='RdsEndpointAddress'].OutputValue" --output text)
 
           aws ssm put-parameter --name "/cloudmart/dev/database/password" --type SecureString --value "$DB_PASSWORD" --overwrite
           aws ssm put-parameter --name "/cloudmart/dev/database/host" --type String --value "$RDS_HOST" --overwrite
           aws ssm put-parameter --name "/cloudmart/dev/database/name" --type String --value "cloudmart" --overwrite
           aws ssm put-parameter --name "/cloudmart/dev/database/username" --type String --value "cloudmart_admin" --overwrite
+          echo "SSM database parameters written."
 
-          echo "SSM database parameters written. Password value itself never appears in this log."
+  # ═══════════════════════════════════════════════════════
+  # JOB 3: storage-stack
+  # ═══════════════════════════════════════════════════════
+  deploy-storage:
+    name: Deploy storage-stack
+    runs-on: ubuntu-latest
+    needs: deploy-database
+    env:
+      STACK_NAME: cloudmart-dev-storage
+      TEMPLATE_FILE: cloudformation/storage-stack.yaml
+      CHANGESET_NAME: cs-storage-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@v4
 
-      # ---------- storage-stack ----------
-      - name: Deploy storage-stack
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Determine change set type
+        id: stack-check
         run: |
-          aws cloudformation deploy \
-            --stack-name cloudmart-dev-storage \
-            --template-file cloudformation/storage-stack.yaml \
-            --parameter-overrides Environment=dev \
-            --capabilities CAPABILITY_NAMED_IAM \
-            --no-fail-on-empty-changeset
-
-      - name: Confirm storage-stack reached a healthy state
-        run: |
-          STATUS=$(aws cloudformation describe-stacks \
-            --stack-name cloudmart-dev-storage \
-            --query "Stacks[0].StackStatus" --output text)
-          echo "Stack status: $STATUS"
-          if [[ "$STATUS" != "CREATE_COMPLETE" && "$STATUS" != "UPDATE_COMPLETE" ]]; then
-            echo "storage-stack did not reach a healthy state."
-            exit 1
+          if aws cloudformation describe-stacks --stack-name "$STACK_NAME" >/dev/null 2>&1; then
+            echo "changeset_type=UPDATE" >> "$GITHUB_OUTPUT"
+          else
+            echo "changeset_type=CREATE" >> "$GITHUB_OUTPUT"
           fi
 
-      # ---------- eventbus-stack ----------
-      - name: Deploy eventbus-stack
+      - name: Create change set
         run: |
-          aws cloudformation deploy \
-            --stack-name cloudmart-dev-eventbus \
-            --template-file cloudformation/eventbus-stack.yaml \
-            --parameter-overrides Environment=dev \
-            --capabilities CAPABILITY_NAMED_IAM \
-            --no-fail-on-empty-changeset
+          # storage-stack.yaml MUST be non-empty in the repo - if this fails
+          # with "Invalid length for parameter TemplateBody, value: 0",
+          # the file is empty on disk, not an AWS/IAM problem.
+          test -s "$TEMPLATE_FILE" || { echo "ERROR: $TEMPLATE_FILE is empty."; exit 1; }
+          aws cloudformation create-change-set \
+            --stack-name "$STACK_NAME" \
+            --change-set-name "$CHANGESET_NAME" \
+            --change-set-type "${{ steps.stack-check.outputs.changeset_type }}" \
+            --template-body "file://$TEMPLATE_FILE" \
+            --parameters ParameterKey=Environment,ParameterValue=dev \
+            --capabilities CAPABILITY_NAMED_IAM
 
-      - name: Confirm eventbus-stack reached a healthy state
+      - name: Wait for change set to be ready
         run: |
-          STATUS=$(aws cloudformation describe-stacks \
-            --stack-name cloudmart-dev-eventbus \
-            --query "Stacks[0].StackStatus" --output text)
-          echo "Stack status: $STATUS"
-          if [[ "$STATUS" != "CREATE_COMPLETE" && "$STATUS" != "UPDATE_COMPLETE" ]]; then
-            echo "eventbus-stack did not reach a healthy state."
-            exit 1
+          for i in $(seq 1 20); do
+            STATUS=$(aws cloudformation describe-change-set --stack-name "$STACK_NAME" --change-set-name "$CHANGESET_NAME" --query 'Status' --output text)
+            REASON=$(aws cloudformation describe-change-set --stack-name "$STACK_NAME" --change-set-name "$CHANGESET_NAME" --query 'StatusReason' --output text)
+            echo "Attempt $i/20 - Status: $STATUS"
+            if [ "$STATUS" = "CREATE_COMPLETE" ]; then
+              echo "ready=true" >> "$GITHUB_ENV"; break
+            elif [ "$STATUS" = "FAILED" ]; then
+              if echo "$REASON" | grep -qi "didn't contain changes\|No updates"; then
+                echo "No changes to deploy."
+                echo "ready=nochange" >> "$GITHUB_ENV"; break
+              else
+                echo "Change set failed: $REASON"; exit 1
+              fi
+            else
+              sleep 15
+            fi
+          done
+
+      - name: Execute change set
+        if: env.ready == 'true'
+        run: aws cloudformation execute-change-set --stack-name "$STACK_NAME" --change-set-name "$CHANGESET_NAME"
+
+      - name: Wait for stack to stabilize
+        if: env.ready == 'true'
+        run: |
+          for i in $(seq 1 40); do
+            STATUS=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --query 'Stacks[0].StackStatus' --output text)
+            echo "Attempt $i/40 - Stack status: $STATUS"
+            case "$STATUS" in
+              CREATE_COMPLETE|UPDATE_COMPLETE) echo "Stack healthy."; exit 0 ;;
+              *IN_PROGRESS) sleep 30 ;;
+              *FAILED|*ROLLBACK_COMPLETE)
+                echo "Stack failed with status: $STATUS"
+                echo "--- Recent stack events ---"
+                aws cloudformation describe-stack-events --stack-name "$STACK_NAME" \
+                  --query 'StackEvents[:15].{Time:Timestamp,Status:ResourceStatus,Resource:LogicalResourceId,Reason:ResourceStatusReason}' \
+                  --output table
+                exit 1 ;;
+              *) sleep 30 ;;
+            esac
+          done
+
+  # ═══════════════════════════════════════════════════════
+  # JOB 4: eventbus-stack
+  # ═══════════════════════════════════════════════════════
+  deploy-eventbus:
+    name: Deploy eventbus-stack
+    runs-on: ubuntu-latest
+    needs: deploy-storage
+    env:
+      STACK_NAME: cloudmart-dev-eventbus
+      TEMPLATE_FILE: cloudformation/eventbus-stack.yaml
+      CHANGESET_NAME: cs-eventbus-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Determine change set type
+        id: stack-check
+        run: |
+          if aws cloudformation describe-stacks --stack-name "$STACK_NAME" >/dev/null 2>&1; then
+            echo "changeset_type=UPDATE" >> "$GITHUB_OUTPUT"
+          else
+            echo "changeset_type=CREATE" >> "$GITHUB_OUTPUT"
           fi
 
-      # ---------- Summary ----------
-      - name: Show all exports so far
+      - name: Create change set
+        run: |
+          test -s "$TEMPLATE_FILE" || { echo "ERROR: $TEMPLATE_FILE is empty."; exit 1; }
+          aws cloudformation create-change-set \
+            --stack-name "$STACK_NAME" \
+            --change-set-name "$CHANGESET_NAME" \
+            --change-set-type "${{ steps.stack-check.outputs.changeset_type }}" \
+            --template-body "file://$TEMPLATE_FILE" \
+            --parameters ParameterKey=Environment,ParameterValue=dev \
+            --capabilities CAPABILITY_NAMED_IAM
+
+      - name: Wait for change set to be ready
+        run: |
+          for i in $(seq 1 20); do
+            STATUS=$(aws cloudformation describe-change-set --stack-name "$STACK_NAME" --change-set-name "$CHANGESET_NAME" --query 'Status' --output text)
+            REASON=$(aws cloudformation describe-change-set --stack-name "$STACK_NAME" --change-set-name "$CHANGESET_NAME" --query 'StatusReason' --output text)
+            echo "Attempt $i/20 - Status: $STATUS"
+            if [ "$STATUS" = "CREATE_COMPLETE" ]; then
+              echo "ready=true" >> "$GITHUB_ENV"; break
+            elif [ "$STATUS" = "FAILED" ]; then
+              if echo "$REASON" | grep -qi "didn't contain changes\|No updates"; then
+                echo "No changes to deploy."
+                echo "ready=nochange" >> "$GITHUB_ENV"; break
+              else
+                echo "Change set failed: $REASON"; exit 1
+              fi
+            else
+              sleep 15
+            fi
+          done
+
+      - name: Execute change set
+        if: env.ready == 'true'
+        run: aws cloudformation execute-change-set --stack-name "$STACK_NAME" --change-set-name "$CHANGESET_NAME"
+
+      - name: Wait for stack to stabilize
+        if: env.ready == 'true'
+        run: |
+          for i in $(seq 1 40); do
+            STATUS=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --query 'Stacks[0].StackStatus' --output text)
+            echo "Attempt $i/40 - Stack status: $STATUS"
+            case "$STATUS" in
+              CREATE_COMPLETE|UPDATE_COMPLETE) echo "Stack healthy."; exit 0 ;;
+              *IN_PROGRESS) sleep 30 ;;
+              *FAILED|*ROLLBACK_COMPLETE)
+                echo "Stack failed with status: $STATUS"
+                echo "--- Recent stack events ---"
+                aws cloudformation describe-stack-events --stack-name "$STACK_NAME" \
+                  --query 'StackEvents[:15].{Time:Timestamp,Status:ResourceStatus,Resource:LogicalResourceId,Reason:ResourceStatusReason}' \
+                  --output table
+                exit 1 ;;
+              *) sleep 30 ;;
+            esac
+          done
+
+  # ═══════════════════════════════════════════════════════
+  # JOB 5: Summary
+  # ═══════════════════════════════════════════════════════
+  summary:
+    name: Show All Exports
+    runs-on: ubuntu-latest
+    needs: deploy-eventbus
+    if: always()
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: List all cloudmart-dev exports
         run: |
           aws cloudformation list-exports \
             --query "Exports[?starts_with(Name, 'cloudmart-dev-')].{Name:Name,Value:Value}" \
             --output table
-
-      - name: Deployment result
-        if: always()
-        run: echo "network, database, storage, eventbus stacks processed for commit ${{ github.sha }}."
