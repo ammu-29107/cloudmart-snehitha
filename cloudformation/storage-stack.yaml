@@ -9,7 +9,7 @@ Resources:
   ReportsBucket:
     Type: AWS::S3::Bucket
     Properties:
-      BucketName: !Sub cloudmart-${Environment}-reports
+      BucketName: !Sub 'cloudmart-${Environment}-reports-${AWS::AccountId}'
       BucketEncryption:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault: {SSEAlgorithm: AES256}
@@ -22,7 +22,7 @@ Resources:
   LambdaArtifactsBucket:
     Type: AWS::S3::Bucket
     Properties:
-      BucketName: !Sub cloudmart-${Environment}-lambda-artifacts
+      BucketName: !Sub 'cloudmart-${Environment}-lambda-artifacts-${AWS::AccountId}'
       BucketEncryption:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault: {SSEAlgorithm: AES256}
