@@ -1,4 +1,4 @@
-name: Deploy Infrastructure
+name: CloudMart Deploy - Network Only
 
 on:
   push:
@@ -11,37 +11,54 @@ permissions:
   id-token: write
   contents: read
 
-env:
-  AWS_REGION: ${{ vars.AWS_ROLE_ARN }}  
-  
-
 jobs:
   deploy-network:
-    name: Deploy network-stack
     runs-on: ubuntu-latest
-
     steps:
-      - uses: actions/checkout@v4
+
+      - name: Checkout source
+        uses: actions/checkout@v4
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Verify identity
+        run: aws sts get-caller-identity
+
+      - name: Validate network-stack.yaml
+        run: aws cloudformation validate-template --template-body file://cloudformation/network-stack.yaml
 
       - name: Deploy network-stack
         run: |
           aws cloudformation deploy \
+            --stack-name cloudmart-dev-network \
             --template-file cloudformation/network-stack.yaml \
-            --stack-name cloudmart-network \
-            --parameter-overrides Environment=prod \
-            --role-arn "$EXEC_ROLE" \
+            --parameter-overrides Environment=dev \
             --capabilities CAPABILITY_NAMED_IAM \
             --no-fail-on-empty-changeset
 
-      - name: Print stack outputs
+      - name: Confirm stack reached CREATE_COMPLETE or UPDATE_COMPLETE
+        run: |
+          STATUS=$(aws cloudformation describe-stacks \
+            --stack-name cloudmart-dev-network \
+            --query "Stacks[0].StackStatus" --output text)
+          echo "Stack status: $STATUS"
+          if [[ "$STATUS" != "CREATE_COMPLETE" && "$STATUS" != "UPDATE_COMPLETE" ]]; then
+            echo "network-stack did not reach a healthy state."
+            exit 1
+          fi
+
+      - name: Show every exported value
         run: |
           aws cloudformation describe-stacks \
-            --stack-name cloudmart-network \
-            --query 'Stacks[0].Outputs[*].{Key:OutputKey,Value:OutputValue}' \
+            --stack-name cloudmart-dev-network \
+            --query "Stacks[0].Outputs" --output table
+
+      - name: Confirm exports are visible to other stacks
+        run: |
+          aws cloudformation list-exports \
+            --query "Exports[?starts_with(Name, 'cloudmart-dev-')].{Name:Name,Value:Value}" \
             --output table
