@@ -45,7 +45,7 @@ Resources:
         - Fn::ImportValue: !Sub cloudmart-${Environment}-sg-rds
       PubliclyAccessible: false
       StorageEncrypted: true
-      BackupRetentionPeriod: 7
+      BackupRetentionPeriod: 1   # free-tier accounts reject longer retention periods
 
 Outputs:
   RdsEndpointAddress:
