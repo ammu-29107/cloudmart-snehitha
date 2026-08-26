@@ -1,10 +1,13 @@
-name: CloudMart Deploy - Network Only
+name: CloudMart Deploy - Network, Database, Storage, Eventbus
 
 on:
   push:
     branches: [main]
     paths:
       - 'cloudformation/network-stack.yaml'
+      - 'cloudformation/database-stack.yaml'
+      - 'cloudformation/storage-stack.yaml'
+      - 'cloudformation/eventbus-stack.yaml'
   workflow_dispatch:
 
 permissions:
@@ -12,7 +15,7 @@ permissions:
   contents: read
 
 jobs:
-  deploy-network:
+  deploy:
     runs-on: ubuntu-latest
     steps:
 
@@ -28,9 +31,14 @@ jobs:
       - name: Verify identity
         run: aws sts get-caller-identity
 
-      - name: Validate network-stack.yaml
-        run: aws cloudformation validate-template --template-body file://cloudformation/network-stack.yaml
+      - name: Validate all templates
+        run: |
+          for tpl in cloudformation/network-stack.yaml cloudformation/database-stack.yaml cloudformation/storage-stack.yaml cloudformation/eventbus-stack.yaml; do
+            echo "Validating $tpl"
+            aws cloudformation validate-template --template-body file://$tpl
+          done
 
+      # ---------- network-stack (already confirmed working, kept idempotent) ----------
       - name: Deploy network-stack
         run: |
           aws cloudformation deploy \
@@ -40,25 +48,102 @@ jobs:
             --capabilities CAPABILITY_NAMED_IAM \
             --no-fail-on-empty-changeset
 
-      - name: Confirm stack reached CREATE_COMPLETE or UPDATE_COMPLETE
+      # ---------- database-stack ----------
+      - name: Deploy database-stack
+        run: |
+          aws cloudformation deploy \
+            --stack-name cloudmart-dev-database \
+            --template-file cloudformation/database-stack.yaml \
+            --parameter-overrides Environment=dev \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --no-fail-on-empty-changeset
+
+      - name: Confirm database-stack reached a healthy state
         run: |
           STATUS=$(aws cloudformation describe-stacks \
-            --stack-name cloudmart-dev-network \
+            --stack-name cloudmart-dev-database \
             --query "Stacks[0].StackStatus" --output text)
           echo "Stack status: $STATUS"
           if [[ "$STATUS" != "CREATE_COMPLETE" && "$STATUS" != "UPDATE_COMPLETE" ]]; then
-            echo "network-stack did not reach a healthy state."
+            echo "database-stack did not reach a healthy state."
             exit 1
           fi
 
-      - name: Show every exported value
+      # ---------- Bridge: move the RDS-generated password into SSM ----------
+      # AWS::SSM::Parameter cannot create a SecureString directly — this is a
+      # real CloudFormation limitation, not a workaround for convenience.
+      # ManageMasterUserPassword put the real password in Secrets Manager;
+      # this step reads it once and writes it to the SSM path every Lambda
+      # will read from. The password is never echoed anywhere in this log.
+      - name: Bridge RDS password into SSM
         run: |
-          aws cloudformation describe-stacks \
-            --stack-name cloudmart-dev-network \
-            --query "Stacks[0].Outputs" --output table
+          SECRET_ARN=$(aws cloudformation describe-stacks \
+            --stack-name cloudmart-dev-database \
+            --query "Stacks[0].Outputs[?OutputKey=='RdsSecretArn'].OutputValue" --output text)
 
-      - name: Confirm exports are visible to other stacks
+          DB_PASSWORD=$(aws secretsmanager get-secret-value --secret-id "$SECRET_ARN" \
+            --query "SecretString" --output text | python3 -c "import sys,json; print(json.load(sys.stdin)['password'])")
+
+          RDS_HOST=$(aws cloudformation describe-stacks \
+            --stack-name cloudmart-dev-database \
+            --query "Stacks[0].Outputs[?OutputKey=='RdsEndpointAddress'].OutputValue" --output text)
+
+          aws ssm put-parameter --name "/cloudmart/dev/database/password" --type SecureString --value "$DB_PASSWORD" --overwrite
+          aws ssm put-parameter --name "/cloudmart/dev/database/host" --type String --value "$RDS_HOST" --overwrite
+          aws ssm put-parameter --name "/cloudmart/dev/database/name" --type String --value "cloudmart" --overwrite
+          aws ssm put-parameter --name "/cloudmart/dev/database/username" --type String --value "cloudmart_admin" --overwrite
+
+          echo "SSM database parameters written. Password value itself never appears in this log."
+
+      # ---------- storage-stack ----------
+      - name: Deploy storage-stack
+        run: |
+          aws cloudformation deploy \
+            --stack-name cloudmart-dev-storage \
+            --template-file cloudformation/storage-stack.yaml \
+            --parameter-overrides Environment=dev \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --no-fail-on-empty-changeset
+
+      - name: Confirm storage-stack reached a healthy state
+        run: |
+          STATUS=$(aws cloudformation describe-stacks \
+            --stack-name cloudmart-dev-storage \
+            --query "Stacks[0].StackStatus" --output text)
+          echo "Stack status: $STATUS"
+          if [[ "$STATUS" != "CREATE_COMPLETE" && "$STATUS" != "UPDATE_COMPLETE" ]]; then
+            echo "storage-stack did not reach a healthy state."
+            exit 1
+          fi
+
+      # ---------- eventbus-stack ----------
+      - name: Deploy eventbus-stack
+        run: |
+          aws cloudformation deploy \
+            --stack-name cloudmart-dev-eventbus \
+            --template-file cloudformation/eventbus-stack.yaml \
+            --parameter-overrides Environment=dev \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --no-fail-on-empty-changeset
+
+      - name: Confirm eventbus-stack reached a healthy state
+        run: |
+          STATUS=$(aws cloudformation describe-stacks \
+            --stack-name cloudmart-dev-eventbus \
+            --query "Stacks[0].StackStatus" --output text)
+          echo "Stack status: $STATUS"
+          if [[ "$STATUS" != "CREATE_COMPLETE" && "$STATUS" != "UPDATE_COMPLETE" ]]; then
+            echo "eventbus-stack did not reach a healthy state."
+            exit 1
+          fi
+
+      # ---------- Summary ----------
+      - name: Show all exports so far
         run: |
           aws cloudformation list-exports \
             --query "Exports[?starts_with(Name, 'cloudmart-dev-')].{Name:Name,Value:Value}" \
             --output table
+
+      - name: Deployment result
+        if: always()
+        run: echo "network, database, storage, eventbus stacks processed for commit ${{ github.sha }}."
