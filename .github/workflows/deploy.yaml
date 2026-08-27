@@ -75,11 +75,11 @@ jobs:
             # real resources were ever created, so this still needs a CREATE
             # type change set, not UPDATE.
             echo "changeset_type=CREATE" >> "$GITHUB_OUTPUT"
-          elif [ "$STACK_STATUS" = "ROLLBACK_COMPLETE" ]; then
+          elif [ "$STACK_STATUS" = "ROLLBACK_COMPLETE" ] || [ "$STACK_STATUS" = "ROLLBACK_FAILED" ]; then
             # A stack in ROLLBACK_COMPLETE can never be updated - CloudFormation
             # requires it to be deleted and recreated from scratch. This is not
             # optional; UPDATE will always be rejected against this state.
-            echo "Stack is stuck in ROLLBACK_COMPLETE - deleting before recreating..."
+            echo "Stack is stuck in $STACK_STATUS - deleting before recreating..."
             aws cloudformation delete-stack --stack-name "$STACK_NAME"
             aws cloudformation wait stack-delete-complete --stack-name "$STACK_NAME"
             echo "Deleted. Will recreate fresh."
@@ -175,8 +175,8 @@ jobs:
             # real resources were ever created, so this still needs a CREATE
             # type change set, not UPDATE.
             echo "changeset_type=CREATE" >> "$GITHUB_OUTPUT"
-          elif [ "$STACK_STATUS" = "ROLLBACK_COMPLETE" ]; then
-            echo "Stack is stuck in ROLLBACK_COMPLETE - deleting before recreating..."
+          elif [ "$STACK_STATUS" = "ROLLBACK_COMPLETE" ] || [ "$STACK_STATUS" = "ROLLBACK_FAILED" ]; then
+            echo "Stack is stuck in $STACK_STATUS - deleting before recreating..."
             aws cloudformation delete-stack --stack-name "$STACK_NAME"
             aws cloudformation wait stack-delete-complete --stack-name "$STACK_NAME"
             echo "Deleted. Will recreate fresh."
@@ -291,8 +291,8 @@ jobs:
             # real resources were ever created, so this still needs a CREATE
             # type change set, not UPDATE.
             echo "changeset_type=CREATE" >> "$GITHUB_OUTPUT"
-          elif [ "$STACK_STATUS" = "ROLLBACK_COMPLETE" ]; then
-            echo "Stack is stuck in ROLLBACK_COMPLETE - deleting before recreating..."
+          elif [ "$STACK_STATUS" = "ROLLBACK_COMPLETE" ] || [ "$STACK_STATUS" = "ROLLBACK_FAILED" ]; then
+            echo "Stack is stuck in $STACK_STATUS - deleting before recreating..."
             aws cloudformation delete-stack --stack-name "$STACK_NAME"
             aws cloudformation wait stack-delete-complete --stack-name "$STACK_NAME"
             echo "Deleted. Will recreate fresh."
@@ -392,8 +392,8 @@ jobs:
             # real resources were ever created, so this still needs a CREATE
             # type change set, not UPDATE.
             echo "changeset_type=CREATE" >> "$GITHUB_OUTPUT"
-          elif [ "$STACK_STATUS" = "ROLLBACK_COMPLETE" ]; then
-            echo "Stack is stuck in ROLLBACK_COMPLETE - deleting before recreating..."
+          elif [ "$STACK_STATUS" = "ROLLBACK_COMPLETE" ] || [ "$STACK_STATUS" = "ROLLBACK_FAILED" ]; then
+            echo "Stack is stuck in $STACK_STATUS - deleting before recreating..."
             aws cloudformation delete-stack --stack-name "$STACK_NAME"
             aws cloudformation wait stack-delete-complete --stack-name "$STACK_NAME"
             echo "Deleted. Will recreate fresh."
