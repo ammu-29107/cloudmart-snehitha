@@ -350,7 +350,7 @@ SAMPLE_DATA_STATEMENTS = [
 # LAMBDA HANDLER
 # ============================================================
 
-def lambda_handler(event, context):
+def handler(event, context):
 
     request_id = context.aws_request_id
 
