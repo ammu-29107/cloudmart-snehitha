@@ -625,7 +625,15 @@ jobs:
 
       - name: Smoke test - no token returns 401
         run: |
-          STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${{ steps.outputs.outputs.product_url }}products")
+          URL="${{ steps.outputs.outputs.product_url }}products"
+
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$URL")
+
+          echo "================================"
+          echo "Product API status: $STATUS"
+          echo "Expected status: 401"
+          echo "================================"
+
           test "$STATUS" -eq 401
 
       - name: Smoke test - wrong token returns 401
