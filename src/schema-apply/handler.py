@@ -146,7 +146,7 @@ SAMPLE_DATA_STATEMENTS = [
 ]
 
 
-def handler(event, context):
+def lambda_handler(event, context):
     password = ssm.get_parameter(
         Name=os.environ["DB_PASSWORD_PARAM"], WithDecryption=True
     )["Parameter"]["Value"]

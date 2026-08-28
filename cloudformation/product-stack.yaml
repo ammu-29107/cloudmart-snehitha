@@ -564,7 +564,7 @@ Resources:
         python3.12
 
       Handler:
-        lambda_function.lambda_handler
+        handler.lambda_handler
 
       Role:
         !GetAtt SchemaApplyRole.Arn
