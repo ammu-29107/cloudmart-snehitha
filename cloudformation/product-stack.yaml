@@ -464,6 +464,24 @@ Resources:
 
 
   # ==============================================================
+  # PRODUCT FUNCTION URL PERMISSION
+  # ==============================================================
+
+  ProductFunctionInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName:
+        !Ref ProductLambda
+
+      Action:
+        lambda:InvokeFunction
+
+      Principal: '*'
+
+      InvokedViaFunctionUrl: true
+
+
+  # ==============================================================
   # LOW STOCK SNS TOPIC
   # ==============================================================
 
