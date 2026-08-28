@@ -507,27 +507,16 @@ Resources:
 
         - PolicyName: SchemaApplySSMRead
           PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
+          Version: '2012-10-17'
+          Statement:
 
-              - Effect: Allow
-                Action:
-                  - ssm:GetParameter
+            - Effect: Allow
+              Action:
+                - ssm:GetParameter
+                - ssm:GetParameters
 
-                Resource:
-
-                  - !Sub >
-                    arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudmart/${Environment}/database/host
-
-                  - !Sub >
-                    arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudmart/${Environment}/database/name
-
-                  - !Sub >
-                    arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudmart/${Environment}/database/username
-
-                  - !Sub >
-                    arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudmart/${Environment}/database/password
-
+              Resource:
+                - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudmart/${Environment}/database/*
 
         # --------------------------------------------------------
         # CLOUDWATCH
