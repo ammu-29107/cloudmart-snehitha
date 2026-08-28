@@ -1528,11 +1528,19 @@ jobs:
           echo "authorizer_url=$AUTHORIZER_URL" >> "$GITHUB_OUTPUT"
 
 
-      # ========================================================
+            # ========================================================
       # AUTHORIZE TEST
       #
-      # 403 is treated as propagation delay.
-      # 401 is the expected application response.
+      # The Function URL uses AuthType: NONE.
+      #
+      # Expected application response:
+      #   401 = Authorizer Lambda is reachable and correctly
+      #         rejects a request without a token.
+      #
+      # 403 can come from the Lambda Function URL permission
+      # configuration, so after retries we inspect the actual
+      # configuration instead of treating it indefinitely as
+      # propagation.
       # ========================================================
 
       - name: Smoke test - Authorizer rejects missing token
@@ -1543,7 +1551,9 @@ jobs:
 
           echo "Testing Authorizer Function URL..."
           echo "$URL"
+          echo
 
+          SUCCESS=false
 
           for attempt in {1..10}; do
 
@@ -1558,27 +1568,34 @@ jobs:
 
             echo "Authorizer HTTP status: $STATUS"
 
-
             if [ "$STATUS" -eq 401 ]; then
 
               echo "Authorizer correctly rejected missing token."
 
-              cat /tmp/authorizer-response.txt
+              echo "Response:"
+              cat /tmp/authorizer-response.txt || true
 
-              exit 0
+              SUCCESS=true
+              break
 
             elif [ "$STATUS" -eq 403 ]; then
 
-              echo "Received 403. Function URL may still be propagating."
+              echo "Received HTTP 403."
+
+              echo "Response:"
+              cat /tmp/authorizer-response.txt || true
+
+              echo
+              echo "The Function URL may still be propagating."
+              echo "Waiting before retry..."
 
               sleep 10
 
-              continue
-
             else
 
-              echo "Unexpected Authorizer response."
+              echo "Unexpected Authorizer response: $STATUS"
 
+              echo "Response:"
               cat /tmp/authorizer-response.txt || true
 
               exit 1
@@ -1588,9 +1605,47 @@ jobs:
           done
 
 
-          echo "ERROR: Authorizer Function URL did not become ready."
+          if [ "$SUCCESS" != "true" ]; then
 
-          exit 1
+            echo
+            echo "======================================================"
+            echo "ERROR: Authorizer Function URL remained at HTTP 403."
+            echo "======================================================"
+            echo
+
+            echo "Checking Lambda Function URL configuration..."
+            aws lambda get-function-url-config \
+              --function-name cloudmart-dev-authorizer \
+              --output json || true
+
+            echo
+            echo "Checking Authorizer Lambda resource policy..."
+            aws lambda get-policy \
+              --function-name cloudmart-dev-authorizer \
+              --output json || true
+
+            echo
+            echo "Checking Authorizer Lambda configuration..."
+            aws lambda get-function-configuration \
+              --function-name cloudmart-dev-authorizer \
+              --query '{FunctionName:FunctionName,State:State,LastUpdateStatus:LastUpdateStatus,Runtime:Runtime,Handler:Handler}' \
+              --output table || true
+
+            echo
+            echo "Recent Authorizer Lambda logs:"
+            aws logs describe-log-streams \
+              --log-group-name /aws/lambda/cloudmart-dev-authorizer \
+              --order-by LastEventTime \
+              --descending \
+              --max-items 3 \
+              --output table || true
+
+            echo
+            echo "Authorizer Function URL did not become reachable."
+
+            exit 1
+
+          fi
 
 
       # ========================================================
@@ -1604,6 +1659,10 @@ jobs:
           URL="${{ steps.outputs.outputs.product_url }}products"
 
           echo "Testing Product without token..."
+          echo "$URL"
+          echo
+
+          SUCCESS=false
 
           for attempt in {1..10}; do
 
@@ -1618,24 +1677,26 @@ jobs:
 
             echo "Product HTTP status: $STATUS"
 
-
             if [ "$STATUS" -eq 401 ]; then
 
               echo "Product correctly rejected missing token."
 
-              exit 0
+              echo "Response:"
+              cat /tmp/product-no-token-response.txt || true
+
+              SUCCESS=true
+              break
 
             elif [ "$STATUS" -eq 403 ]; then
 
-              echo "Received 403. Function URL may still be propagating."
+              echo "Received HTTP 403."
+              echo "Waiting before retry..."
 
               sleep 10
 
-              continue
-
             else
 
-              echo "Unexpected Product response."
+              echo "Unexpected Product response: $STATUS"
 
               cat /tmp/product-no-token-response.txt || true
 
@@ -1646,9 +1707,28 @@ jobs:
           done
 
 
-          echo "ERROR: Product Function URL did not become ready."
+          if [ "$SUCCESS" != "true" ]; then
 
-          exit 1
+            echo
+            echo "======================================================"
+            echo "ERROR: Product Function URL remained at HTTP 403."
+            echo "======================================================"
+            echo
+
+            echo "Checking Product Function URL configuration..."
+            aws lambda get-function-url-config \
+              --function-name cloudmart-dev-product \
+              --output json || true
+
+            echo
+            echo "Checking Product Lambda resource policy..."
+            aws lambda get-policy \
+              --function-name cloudmart-dev-product \
+              --output json || true
+
+            exit 1
+
+          fi
 
 
       # ========================================================
@@ -1662,7 +1742,10 @@ jobs:
           URL="${{ steps.outputs.outputs.product_url }}products"
 
           echo "Testing Product with wrong token..."
+          echo "$URL"
+          echo
 
+          SUCCESS=false
 
           for attempt in {1..10}; do
 
@@ -1678,24 +1761,26 @@ jobs:
 
             echo "Product HTTP status: $STATUS"
 
-
             if [ "$STATUS" -eq 401 ]; then
 
               echo "Product correctly rejected wrong token."
 
-              exit 0
+              echo "Response:"
+              cat /tmp/product-wrong-token-response.txt || true
+
+              SUCCESS=true
+              break
 
             elif [ "$STATUS" -eq 403 ]; then
 
-              echo "Received 403. Function URL may still be propagating."
+              echo "Received HTTP 403."
+              echo "Waiting before retry..."
 
               sleep 10
 
-              continue
-
             else
 
-              echo "Unexpected Product response."
+              echo "Unexpected Product response: $STATUS"
 
               cat /tmp/product-wrong-token-response.txt || true
 
@@ -1706,9 +1791,28 @@ jobs:
           done
 
 
-          echo "ERROR: Product Function URL did not become ready."
+          if [ "$SUCCESS" != "true" ]; then
 
-          exit 1
+            echo
+            echo "======================================================"
+            echo "ERROR: Product Function URL remained at HTTP 403."
+            echo "======================================================"
+            echo
+
+            echo "Checking Product Function URL configuration..."
+            aws lambda get-function-url-config \
+              --function-name cloudmart-dev-product \
+              --output json || true
+
+            echo
+            echo "Checking Product Lambda resource policy..."
+            aws lambda get-policy \
+              --function-name cloudmart-dev-product \
+              --output json || true
+
+            exit 1
+
+          fi
 
 
       # ========================================================
@@ -1722,7 +1826,10 @@ jobs:
           URL="${{ steps.outputs.outputs.product_url }}products"
 
           echo "Testing Product with correct token..."
+          echo "$URL"
+          echo
 
+          SUCCESS=false
 
           for attempt in {1..10}; do
 
@@ -1738,26 +1845,26 @@ jobs:
 
             echo "Product HTTP status: $STATUS"
 
-
             if [ "$STATUS" -eq 200 ]; then
 
               echo "Product Function URL is healthy."
 
-              cat /tmp/product-correct-token-response.txt
+              echo "Response:"
+              cat /tmp/product-correct-token-response.txt || true
 
-              exit 0
+              SUCCESS=true
+              break
 
             elif [ "$STATUS" -eq 403 ]; then
 
-              echo "Received 403. Function URL may still be propagating."
+              echo "Received HTTP 403."
+              echo "Waiting before retry..."
 
               sleep 10
 
-              continue
-
             else
 
-              echo "Unexpected Product response."
+              echo "Unexpected Product response: $STATUS"
 
               cat /tmp/product-correct-token-response.txt || true
 
@@ -1768,9 +1875,35 @@ jobs:
           done
 
 
-          echo "ERROR: Product Function URL did not become ready."
+          if [ "$SUCCESS" != "true" ]; then
 
-          exit 1
+            echo
+            echo "======================================================"
+            echo "ERROR: Product Function URL remained at HTTP 403."
+            echo "======================================================"
+            echo
+
+            echo "Checking Product Function URL configuration..."
+            aws lambda get-function-url-config \
+              --function-name cloudmart-dev-product \
+              --output json || true
+
+            echo
+            echo "Checking Product Lambda resource policy..."
+            aws lambda get-policy \
+              --function-name cloudmart-dev-product \
+              --output json || true
+
+            echo
+            echo "Checking Product Lambda configuration..."
+            aws lambda get-function-configuration \
+              --function-name cloudmart-dev-product \
+              --query '{FunctionName:FunctionName,State:State,LastUpdateStatus:LastUpdateStatus,Runtime:Runtime,Handler:Handler}' \
+              --output table || true
+
+            exit 1
+
+          fi
 
 
   # ============================================================
