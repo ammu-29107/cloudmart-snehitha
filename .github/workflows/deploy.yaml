@@ -1,8 +1,11 @@
 name: CloudMart Deploy - Network, Database, Storage, Eventbus, Product
 
 on:
+
   push:
-    branches: [main]
+    branches:
+      - main
+
     paths:
       - 'cloudformation/network-stack.yaml'
       - 'cloudformation/database-stack.yaml'
@@ -10,40 +13,54 @@ on:
       - 'cloudformation/eventbus-stack.yaml'
       - 'cloudformation/product-stack.yaml'
       - 'src/product/**'
+      - 'src/authorizer/**'
       - 'src/shared/**'
       - 'src/schema-apply/**'
       - '.github/workflows/deploy.yaml'
 
   workflow_dispatch:
 
+
 permissions:
   id-token: write
   contents: read
 
+
 jobs:
 
   # ============================================================
-  # JOB 0: Validate every template before touching AWS
+  # JOB 0
+  # VALIDATE TEMPLATES
   # ============================================================
 
   validate-templates:
+
     name: Validate Templates
+
     runs-on: ubuntu-latest
 
     steps:
 
       - uses: actions/checkout@v4
 
+
       - uses: aws-actions/configure-aws-credentials@v4
+
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ secrets.AWS_REGION }}
 
+
       - name: Verify identity
-        run: aws sts get-caller-identity
+
+        run: |
+          aws sts get-caller-identity
+
 
       - name: Validate all CloudFormation templates
+
         run: |
+
           for tpl in \
             cloudformation/network-stack.yaml \
             cloudformation/database-stack.yaml \
@@ -51,6 +68,7 @@ jobs:
             cloudformation/eventbus-stack.yaml \
             cloudformation/product-stack.yaml
           do
+
             echo "Validating $tpl"
 
             test -s "$tpl" || {
@@ -60,35 +78,51 @@ jobs:
 
             aws cloudformation validate-template \
               --template-body "file://$tpl"
+
           done
 
 
   # ============================================================
-  # JOB 1: network-stack
+  # JOB 1
+  # NETWORK
   # ============================================================
 
   deploy-network:
+
     name: Deploy network-stack
+
     runs-on: ubuntu-latest
-    needs: validate-templates
+
+    needs:
+      - validate-templates
 
     env:
+
       STACK_NAME: cloudmart-dev-network
+
       TEMPLATE_FILE: cloudformation/network-stack.yaml
+
       CHANGESET_NAME: cs-network-${{ github.run_id }}-${{ github.run_attempt }}
+
 
     steps:
 
       - uses: actions/checkout@v4
 
+
       - uses: aws-actions/configure-aws-credentials@v4
+
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ secrets.AWS_REGION }}
 
+
       - name: Determine change set type
+
         id: stack-check
+
         run: |
+
           STACK_STATUS=$(aws cloudformation describe-stacks \
             --stack-name "$STACK_NAME" \
             --query 'Stacks[0].StackStatus' \
@@ -96,12 +130,13 @@ jobs:
 
           echo "Current stack status: $STACK_STATUS"
 
-          if [ "$STACK_STATUS" = "NOT_FOUND" ] || [ "$STACK_STATUS" = "REVIEW_IN_PROGRESS" ]; then
+          if [ "$STACK_STATUS" = "NOT_FOUND" ] ||
+             [ "$STACK_STATUS" = "REVIEW_IN_PROGRESS" ]; then
+
             echo "changeset_type=CREATE" >> "$GITHUB_OUTPUT"
 
-          elif [ "$STACK_STATUS" = "ROLLBACK_COMPLETE" ] || [ "$STACK_STATUS" = "ROLLBACK_FAILED" ]; then
-
-            echo "Stack is stuck in $STACK_STATUS - deleting before recreating..."
+          elif [ "$STACK_STATUS" = "ROLLBACK_COMPLETE" ] ||
+               [ "$STACK_STATUS" = "ROLLBACK_FAILED" ]; then
 
             aws cloudformation delete-stack \
               --stack-name "$STACK_NAME"
@@ -109,26 +144,33 @@ jobs:
             aws cloudformation wait stack-delete-complete \
               --stack-name "$STACK_NAME"
 
-            echo "Deleted. Will recreate fresh."
-
             echo "changeset_type=CREATE" >> "$GITHUB_OUTPUT"
 
           else
+
             echo "changeset_type=UPDATE" >> "$GITHUB_OUTPUT"
+
           fi
 
+
       - name: Create change set
+
         run: |
+
           aws cloudformation create-change-set \
             --stack-name "$STACK_NAME" \
             --change-set-name "$CHANGESET_NAME" \
             --change-set-type "${{ steps.stack-check.outputs.changeset_type }}" \
             --template-body "file://$TEMPLATE_FILE" \
-            --parameters ParameterKey=Environment,ParameterValue=dev \
+            --parameters \
+              ParameterKey=Environment,ParameterValue=dev \
             --capabilities CAPABILITY_NAMED_IAM
 
-      - name: Wait for change set to be ready
+
+      - name: Wait for change set
+
         run: |
+
           for i in $(seq 1 20); do
 
             STATUS=$(aws cloudformation describe-change-set \
@@ -146,36 +188,51 @@ jobs:
             echo "Attempt $i/20 - Status: $STATUS"
 
             if [ "$STATUS" = "CREATE_COMPLETE" ]; then
+
               echo "ready=true" >> "$GITHUB_ENV"
               break
 
             elif [ "$STATUS" = "FAILED" ]; then
 
-              if echo "$REASON" | grep -qi "didn't contain changes\|No updates"; then
-                echo "No changes to deploy."
+              if echo "$REASON" |
+                grep -qi "didn't contain changes\|No updates"; then
+
                 echo "ready=nochange" >> "$GITHUB_ENV"
                 break
+
               else
+
                 echo "Change set failed: $REASON"
                 exit 1
+
               fi
 
             else
+
               sleep 15
+
             fi
 
           done
 
+
       - name: Execute change set
+
         if: env.ready == 'true'
+
         run: |
+
           aws cloudformation execute-change-set \
             --stack-name "$STACK_NAME" \
             --change-set-name "$CHANGESET_NAME"
 
-      - name: Wait for stack to stabilize
+
+      - name: Wait for stack
+
         if: env.ready == 'true'
+
         run: |
+
           for i in $(seq 1 40); do
 
             STATUS=$(aws cloudformation describe-stacks \
@@ -188,7 +245,6 @@ jobs:
             case "$STATUS" in
 
               CREATE_COMPLETE|UPDATE_COMPLETE)
-                echo "Stack healthy."
                 exit 0
                 ;;
 
@@ -197,7 +253,6 @@ jobs:
                 ;;
 
               *FAILED|*ROLLBACK_COMPLETE)
-                echo "Stack failed with status: $STATUS"
 
                 aws cloudformation describe-stack-events \
                   --stack-name "$STACK_NAME" \
@@ -212,35 +267,51 @@ jobs:
                 ;;
 
             esac
+
           done
 
 
   # ============================================================
-  # JOB 2: database-stack
+  # JOB 2
+  # DATABASE
   # ============================================================
 
   deploy-database:
+
     name: Deploy database-stack
+
     runs-on: ubuntu-latest
-    needs: deploy-network
+
+    needs:
+      - deploy-network
 
     env:
+
       STACK_NAME: cloudmart-dev-database
+
       TEMPLATE_FILE: cloudformation/database-stack.yaml
+
       CHANGESET_NAME: cs-database-${{ github.run_id }}-${{ github.run_attempt }}
+
 
     steps:
 
       - uses: actions/checkout@v4
 
+
       - uses: aws-actions/configure-aws-credentials@v4
+
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ secrets.AWS_REGION }}
 
+
       - name: Determine change set type
+
         id: stack-check
+
         run: |
+
           STACK_STATUS=$(aws cloudformation describe-stacks \
             --stack-name "$STACK_NAME" \
             --query 'Stacks[0].StackStatus' \
@@ -248,12 +319,13 @@ jobs:
 
           echo "Current stack status: $STACK_STATUS"
 
-          if [ "$STACK_STATUS" = "NOT_FOUND" ] || [ "$STACK_STATUS" = "REVIEW_IN_PROGRESS" ]; then
+          if [ "$STACK_STATUS" = "NOT_FOUND" ] ||
+             [ "$STACK_STATUS" = "REVIEW_IN_PROGRESS" ]; then
+
             echo "changeset_type=CREATE" >> "$GITHUB_OUTPUT"
 
-          elif [ "$STACK_STATUS" = "ROLLBACK_COMPLETE" ] || [ "$STACK_STATUS" = "ROLLBACK_FAILED" ]; then
-
-            echo "Stack is stuck in $STACK_STATUS - deleting before recreating..."
+          elif [ "$STACK_STATUS" = "ROLLBACK_COMPLETE" ] ||
+               [ "$STACK_STATUS" = "ROLLBACK_FAILED" ]; then
 
             aws cloudformation delete-stack \
               --stack-name "$STACK_NAME"
@@ -261,16 +333,19 @@ jobs:
             aws cloudformation wait stack-delete-complete \
               --stack-name "$STACK_NAME"
 
-            echo "Deleted. Will recreate fresh."
-
             echo "changeset_type=CREATE" >> "$GITHUB_OUTPUT"
 
           else
+
             echo "changeset_type=UPDATE" >> "$GITHUB_OUTPUT"
+
           fi
 
+
       - name: Create change set
+
         run: |
+
           aws cloudformation create-change-set \
             --stack-name "$STACK_NAME" \
             --change-set-name "$CHANGESET_NAME" \
@@ -281,8 +356,11 @@ jobs:
               ParameterKey=DbInstanceClass,ParameterValue=db.t3.micro \
             --capabilities CAPABILITY_NAMED_IAM
 
-      - name: Wait for change set to be ready
+
+      - name: Wait for change set
+
         run: |
+
           for i in $(seq 1 20); do
 
             STATUS=$(aws cloudformation describe-change-set \
@@ -300,36 +378,51 @@ jobs:
             echo "Attempt $i/20 - Status: $STATUS"
 
             if [ "$STATUS" = "CREATE_COMPLETE" ]; then
+
               echo "ready=true" >> "$GITHUB_ENV"
               break
 
             elif [ "$STATUS" = "FAILED" ]; then
 
-              if echo "$REASON" | grep -qi "didn't contain changes\|No updates"; then
-                echo "No changes to deploy."
+              if echo "$REASON" |
+                grep -qi "didn't contain changes\|No updates"; then
+
                 echo "ready=nochange" >> "$GITHUB_ENV"
                 break
+
               else
+
                 echo "Change set failed: $REASON"
                 exit 1
+
               fi
 
             else
+
               sleep 15
+
             fi
 
           done
 
+
       - name: Execute change set
+
         if: env.ready == 'true'
+
         run: |
+
           aws cloudformation execute-change-set \
             --stack-name "$STACK_NAME" \
             --change-set-name "$CHANGESET_NAME"
 
-      - name: Wait for stack to stabilize
+
+      - name: Wait for database stack
+
         if: env.ready == 'true'
+
         run: |
+
           for i in $(seq 1 60); do
 
             STATUS=$(aws cloudformation describe-stacks \
@@ -342,7 +435,6 @@ jobs:
             case "$STATUS" in
 
               CREATE_COMPLETE|UPDATE_COMPLETE)
-                echo "Stack healthy."
                 exit 0
                 ;;
 
@@ -351,7 +443,6 @@ jobs:
                 ;;
 
               *FAILED|*ROLLBACK_COMPLETE)
-                echo "Stack failed with status: $STATUS"
 
                 aws cloudformation describe-stack-events \
                   --stack-name "$STACK_NAME" \
@@ -369,7 +460,13 @@ jobs:
 
           done
 
+
+      # ========================================================
+      # BRIDGE RDS PASSWORD INTO SSM
+      # ========================================================
+
       - name: Bridge RDS password into SSM
+
         run: |
 
           SECRET_ARN=$(aws cloudformation describe-stacks \
@@ -377,16 +474,19 @@ jobs:
             --query "Stacks[0].Outputs[?OutputKey=='RdsSecretArn'].OutputValue" \
             --output text)
 
+
           DB_PASSWORD=$(aws secretsmanager get-secret-value \
             --secret-id "$SECRET_ARN" \
             --query "SecretString" \
             --output text |
             python3 -c "import sys,json; print(json.load(sys.stdin)['password'])")
 
+
           RDS_HOST=$(aws cloudformation describe-stacks \
             --stack-name "$STACK_NAME" \
             --query "Stacks[0].Outputs[?OutputKey=='RdsEndpointAddress'].OutputValue" \
             --output text)
+
 
           aws ssm put-parameter \
             --name "/cloudmart/dev/database/password" \
@@ -394,11 +494,13 @@ jobs:
             --value "$DB_PASSWORD" \
             --overwrite
 
+
           aws ssm put-parameter \
             --name "/cloudmart/dev/database/host" \
             --type String \
             --value "$RDS_HOST" \
             --overwrite
+
 
           aws ssm put-parameter \
             --name "/cloudmart/dev/database/name" \
@@ -406,54 +508,70 @@ jobs:
             --value "cloudmart" \
             --overwrite
 
+
           aws ssm put-parameter \
             --name "/cloudmart/dev/database/username" \
             --type String \
             --value "cloudmart_admin" \
             --overwrite
 
+
           echo "SSM database parameters written."
 
 
   # ============================================================
-  # JOB 3: storage-stack
+  # JOB 3
+  # STORAGE
   # ============================================================
 
   deploy-storage:
+
     name: Deploy storage-stack
+
     runs-on: ubuntu-latest
-    needs: deploy-database
+
+    needs:
+      - deploy-database
 
     env:
+
       STACK_NAME: cloudmart-dev-storage
+
       TEMPLATE_FILE: cloudformation/storage-stack.yaml
+
       CHANGESET_NAME: cs-storage-${{ github.run_id }}-${{ github.run_attempt }}
+
 
     steps:
 
       - uses: actions/checkout@v4
 
+
       - uses: aws-actions/configure-aws-credentials@v4
+
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ secrets.AWS_REGION }}
 
+
       - name: Determine change set type
+
         id: stack-check
+
         run: |
+
           STACK_STATUS=$(aws cloudformation describe-stacks \
             --stack-name "$STACK_NAME" \
             --query 'Stacks[0].StackStatus' \
             --output text 2>/dev/null || echo "NOT_FOUND")
 
-          echo "Current stack status: $STACK_STATUS"
+          if [ "$STACK_STATUS" = "NOT_FOUND" ] ||
+             [ "$STACK_STATUS" = "REVIEW_IN_PROGRESS" ]; then
 
-          if [ "$STACK_STATUS" = "NOT_FOUND" ] || [ "$STACK_STATUS" = "REVIEW_IN_PROGRESS" ]; then
             echo "changeset_type=CREATE" >> "$GITHUB_OUTPUT"
 
-          elif [ "$STACK_STATUS" = "ROLLBACK_COMPLETE" ] || [ "$STACK_STATUS" = "ROLLBACK_FAILED" ]; then
-
-            echo "Stack is stuck in $STACK_STATUS - deleting before recreating..."
+          elif [ "$STACK_STATUS" = "ROLLBACK_COMPLETE" ] ||
+               [ "$STACK_STATUS" = "ROLLBACK_FAILED" ]; then
 
             aws cloudformation delete-stack \
               --stack-name "$STACK_NAME"
@@ -461,15 +579,17 @@ jobs:
             aws cloudformation wait stack-delete-complete \
               --stack-name "$STACK_NAME"
 
-            echo "Deleted. Will recreate fresh."
-
             echo "changeset_type=CREATE" >> "$GITHUB_OUTPUT"
 
           else
+
             echo "changeset_type=UPDATE" >> "$GITHUB_OUTPUT"
+
           fi
 
+
       - name: Create change set
+
         run: |
 
           test -s "$TEMPLATE_FILE" || {
@@ -482,11 +602,15 @@ jobs:
             --change-set-name "$CHANGESET_NAME" \
             --change-set-type "${{ steps.stack-check.outputs.changeset_type }}" \
             --template-body "file://$TEMPLATE_FILE" \
-            --parameters ParameterKey=Environment,ParameterValue=dev \
+            --parameters \
+              ParameterKey=Environment,ParameterValue=dev \
             --capabilities CAPABILITY_NAMED_IAM
 
-      - name: Wait for change set to be ready
+
+      - name: Wait for change set
+
         run: |
+
           for i in $(seq 1 20); do
 
             STATUS=$(aws cloudformation describe-change-set \
@@ -504,36 +628,51 @@ jobs:
             echo "Attempt $i/20 - Status: $STATUS"
 
             if [ "$STATUS" = "CREATE_COMPLETE" ]; then
+
               echo "ready=true" >> "$GITHUB_ENV"
               break
 
             elif [ "$STATUS" = "FAILED" ]; then
 
-              if echo "$REASON" | grep -qi "didn't contain changes\|No updates"; then
-                echo "No changes to deploy."
+              if echo "$REASON" |
+                grep -qi "didn't contain changes\|No updates"; then
+
                 echo "ready=nochange" >> "$GITHUB_ENV"
                 break
+
               else
+
                 echo "Change set failed: $REASON"
                 exit 1
+
               fi
 
             else
+
               sleep 15
+
             fi
 
           done
 
+
       - name: Execute change set
+
         if: env.ready == 'true'
+
         run: |
+
           aws cloudformation execute-change-set \
             --stack-name "$STACK_NAME" \
             --change-set-name "$CHANGESET_NAME"
 
-      - name: Wait for stack to stabilize
+
+      - name: Wait for storage stack
+
         if: env.ready == 'true'
+
         run: |
+
           for i in $(seq 1 40); do
 
             STATUS=$(aws cloudformation describe-stacks \
@@ -546,7 +685,6 @@ jobs:
             case "$STATUS" in
 
               CREATE_COMPLETE|UPDATE_COMPLETE)
-                echo "Stack healthy."
                 exit 0
                 ;;
 
@@ -555,7 +693,6 @@ jobs:
                 ;;
 
               *FAILED|*ROLLBACK_COMPLETE)
-                echo "Stack failed with status: $STATUS"
 
                 aws cloudformation describe-stack-events \
                   --stack-name "$STACK_NAME" \
@@ -575,44 +712,58 @@ jobs:
 
 
   # ============================================================
-  # JOB 4: eventbus-stack
+  # JOB 4
+  # EVENTBUS
   # ============================================================
 
   deploy-eventbus:
+
     name: Deploy eventbus-stack
+
     runs-on: ubuntu-latest
-    needs: deploy-storage
+
+    needs:
+      - deploy-storage
 
     env:
+
       STACK_NAME: cloudmart-dev-eventbus
+
       TEMPLATE_FILE: cloudformation/eventbus-stack.yaml
+
       CHANGESET_NAME: cs-eventbus-${{ github.run_id }}-${{ github.run_attempt }}
+
 
     steps:
 
       - uses: actions/checkout@v4
 
+
       - uses: aws-actions/configure-aws-credentials@v4
+
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ secrets.AWS_REGION }}
 
+
       - name: Determine change set type
+
         id: stack-check
+
         run: |
+
           STACK_STATUS=$(aws cloudformation describe-stacks \
             --stack-name "$STACK_NAME" \
             --query 'Stacks[0].StackStatus' \
             --output text 2>/dev/null || echo "NOT_FOUND")
 
-          echo "Current stack status: $STACK_STATUS"
+          if [ "$STACK_STATUS" = "NOT_FOUND" ] ||
+             [ "$STACK_STATUS" = "REVIEW_IN_PROGRESS" ]; then
 
-          if [ "$STACK_STATUS" = "NOT_FOUND" ] || [ "$STACK_STATUS" = "REVIEW_IN_PROGRESS" ]; then
             echo "changeset_type=CREATE" >> "$GITHUB_OUTPUT"
 
-          elif [ "$STACK_STATUS" = "ROLLBACK_COMPLETE" ] || [ "$STACK_STATUS" = "ROLLBACK_FAILED" ]; then
-
-            echo "Stack is stuck in $STACK_STATUS - deleting before recreating..."
+          elif [ "$STACK_STATUS" = "ROLLBACK_COMPLETE" ] ||
+               [ "$STACK_STATUS" = "ROLLBACK_FAILED" ]; then
 
             aws cloudformation delete-stack \
               --stack-name "$STACK_NAME"
@@ -620,15 +771,17 @@ jobs:
             aws cloudformation wait stack-delete-complete \
               --stack-name "$STACK_NAME"
 
-            echo "Deleted. Will recreate fresh."
-
             echo "changeset_type=CREATE" >> "$GITHUB_OUTPUT"
 
           else
+
             echo "changeset_type=UPDATE" >> "$GITHUB_OUTPUT"
+
           fi
 
+
       - name: Create change set
+
         run: |
 
           test -s "$TEMPLATE_FILE" || {
@@ -641,11 +794,15 @@ jobs:
             --change-set-name "$CHANGESET_NAME" \
             --change-set-type "${{ steps.stack-check.outputs.changeset_type }}" \
             --template-body "file://$TEMPLATE_FILE" \
-            --parameters ParameterKey=Environment,ParameterValue=dev \
+            --parameters \
+              ParameterKey=Environment,ParameterValue=dev \
             --capabilities CAPABILITY_NAMED_IAM
 
-      - name: Wait for change set to be ready
+
+      - name: Wait for change set
+
         run: |
+
           for i in $(seq 1 20); do
 
             STATUS=$(aws cloudformation describe-change-set \
@@ -660,39 +817,52 @@ jobs:
               --query 'StatusReason' \
               --output text)
 
-            echo "Attempt $i/20 - Status: $STATUS"
-
             if [ "$STATUS" = "CREATE_COMPLETE" ]; then
+
               echo "ready=true" >> "$GITHUB_ENV"
               break
 
             elif [ "$STATUS" = "FAILED" ]; then
 
-              if echo "$REASON" | grep -qi "didn't contain changes\|No updates"; then
-                echo "No changes to deploy."
+              if echo "$REASON" |
+                grep -qi "didn't contain changes\|No updates"; then
+
                 echo "ready=nochange" >> "$GITHUB_ENV"
                 break
+
               else
+
                 echo "Change set failed: $REASON"
                 exit 1
+
               fi
 
             else
+
               sleep 15
+
             fi
 
           done
 
+
       - name: Execute change set
+
         if: env.ready == 'true'
+
         run: |
+
           aws cloudformation execute-change-set \
             --stack-name "$STACK_NAME" \
             --change-set-name "$CHANGESET_NAME"
 
-      - name: Wait for stack to stabilize
+
+      - name: Wait for eventbus stack
+
         if: env.ready == 'true'
+
         run: |
+
           for i in $(seq 1 40); do
 
             STATUS=$(aws cloudformation describe-stacks \
@@ -700,12 +870,9 @@ jobs:
               --query 'Stacks[0].StackStatus' \
               --output text)
 
-            echo "Attempt $i/40 - Stack status: $STATUS"
-
             case "$STATUS" in
 
               CREATE_COMPLETE|UPDATE_COMPLETE)
-                echo "Stack healthy."
                 exit 0
                 ;;
 
@@ -714,7 +881,6 @@ jobs:
                 ;;
 
               *FAILED|*ROLLBACK_COMPLETE)
-                echo "Stack failed with status: $STATUS"
 
                 aws cloudformation describe-stack-events \
                   --stack-name "$STACK_NAME" \
@@ -734,37 +900,41 @@ jobs:
 
 
   # ============================================================
-  # JOB 5: product-stack
-  #
-  # Product stack now owns:
-  # - Product Lambda
-  # - Product Function URL
-  # - Authentication support
-  # - Schema-apply Lambda
-  # - Low-stock SNS
-  #
-  # There is NO auth-stack.
+  # JOB 5
+  # PRODUCT STACK
   # ============================================================
 
   deploy-product:
+
     name: Deploy product-stack
+
     runs-on: ubuntu-latest
-    needs: deploy-eventbus
+
+    needs:
+      - deploy-eventbus
 
     env:
+
       STACK_NAME: cloudmart-dev-product
+
       TEMPLATE_FILE: cloudformation/product-stack.yaml
+
       CHANGESET_NAME: cs-product-${{ github.run_id }}-${{ github.run_attempt }}
+
 
     steps:
 
       - uses: actions/checkout@v4
 
+
       - uses: actions/setup-python@v5
+
         with:
           python-version: "3.12"
 
+
       - uses: aws-actions/configure-aws-credentials@v4
+
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ secrets.AWS_REGION }}
@@ -773,15 +943,15 @@ jobs:
       # ========================================================
       # AUTHENTICATION TOKEN
       #
-      # There is no auth-stack.
+      # Stored as SSM SecureString.
       #
-      # The token is stored as an SSM SecureString because
-      # CloudFormation cannot directly create SecureString
-      # parameters using AWS::SSM::Parameter.
+      # CloudFormation receives only the parameter name.
       # ========================================================
 
       - name: Write auth token SecureString
+
         run: |
+
           aws ssm put-parameter \
             --name "/cloudmart/dev/auth/token" \
             --type SecureString \
@@ -794,7 +964,9 @@ jobs:
       # ========================================================
 
       - name: Write low-stock threshold parameter
+
         run: |
+
           aws ssm put-parameter \
             --name "/cloudmart/dev/inventory/low-stock-threshold" \
             --type String \
@@ -803,11 +975,13 @@ jobs:
 
 
       # ========================================================
-      # GET LAMBDA ARTIFACTS BUCKET
+      # GET ARTIFACT BUCKET
       # ========================================================
 
       - name: Get Lambda artifacts bucket name
+
         id: bucket
+
         run: |
 
           BUCKET=$(aws cloudformation list-exports \
@@ -823,52 +997,107 @@ jobs:
 
 
       # ========================================================
+      # CLEAN BUILD DIRECTORIES
+      # ========================================================
+
+      - name: Prepare Lambda build directories
+
+        run: |
+
+          rm -rf build
+
+          mkdir -p build/product
+          mkdir -p build/authorizer
+          mkdir -p build/schema-apply
+
+
+      # ========================================================
       # PACKAGE PRODUCT LAMBDA
+      #
+      # Result:
+      #
+      # build/product/
+      #   handler.py
+      #   shared/
+      #   pymysql/
+      #   ...
       # ========================================================
 
       - name: Package Product Lambda
+
         run: |
 
-          mkdir -p build/product
+          cp src/product/handler.py \
+            build/product/handler.py
 
-          cp -r src/shared src/product/
+          cp -r src/shared \
+            build/product/shared
 
           pip install pymysql \
-            -t src/product/ \
+            -t build/product \
             --break-system-packages
 
-          cd src/product
+          cd build/product
 
-          zip -r ../../build/product.zip .
+          zip -r ../../product.zip .
 
           cd ../..
 
           aws s3 cp \
-            build/product.zip \
+            product.zip \
             s3://${{ steps.bucket.outputs.name }}/dev/product/product-${{ github.sha }}.zip
 
 
       # ========================================================
-      # PACKAGE SCHEMA-APPLY LAMBDA
+      # PACKAGE AUTHORIZER LAMBDA
+      #
+      # Result:
+      #
+      # build/authorizer/
+      #   lambda_function.py
       # ========================================================
 
-      - name: Package schema-apply Lambda
+      - name: Package Authorizer Lambda
+
         run: |
 
-          mkdir -p build/schema-apply
+          cp src/authorizer/lambda_function.py \
+            build/authorizer/lambda_function.py
 
-          pip install pymysql \
-            -t src/schema-apply/ \
-            --break-system-packages
+          cd build/authorizer
 
-          cd src/schema-apply
-
-          zip -r ../../build/schema-apply.zip .
+          zip -r ../../authorizer.zip .
 
           cd ../..
 
           aws s3 cp \
-            build/schema-apply.zip \
+            authorizer.zip \
+            s3://${{ steps.bucket.outputs.name }}/dev/authorizer/authorizer-${{ github.sha }}.zip
+
+
+      # ========================================================
+      # PACKAGE SCHEMA APPLY LAMBDA
+      # ========================================================
+
+      - name: Package schema-apply Lambda
+
+        run: |
+
+          cp src/schema-apply/handler.py \
+            build/schema-apply/handler.py
+
+          pip install pymysql \
+            -t build/schema-apply \
+            --break-system-packages
+
+          cd build/schema-apply
+
+          zip -r ../../schema-apply.zip .
+
+          cd ../..
+
+          aws s3 cp \
+            schema-apply.zip \
             s3://${{ steps.bucket.outputs.name }}/dev/schema-apply/schema-apply-${{ github.sha }}.zip
 
 
@@ -877,7 +1106,9 @@ jobs:
       # ========================================================
 
       - name: Determine change set type
+
         id: stack-check
+
         run: |
 
           STACK_STATUS=$(aws cloudformation describe-stacks \
@@ -887,13 +1118,15 @@ jobs:
 
           echo "Current stack status: $STACK_STATUS"
 
-          if [ "$STACK_STATUS" = "NOT_FOUND" ] || [ "$STACK_STATUS" = "REVIEW_IN_PROGRESS" ]; then
+          if [ "$STACK_STATUS" = "NOT_FOUND" ] ||
+             [ "$STACK_STATUS" = "REVIEW_IN_PROGRESS" ]; then
 
             echo "changeset_type=CREATE" >> "$GITHUB_OUTPUT"
 
-          elif [ "$STACK_STATUS" = "ROLLBACK_COMPLETE" ] || [ "$STACK_STATUS" = "ROLLBACK_FAILED" ]; then
+          elif [ "$STACK_STATUS" = "ROLLBACK_COMPLETE" ] ||
+               [ "$STACK_STATUS" = "ROLLBACK_FAILED" ]; then
 
-            echo "Stack is stuck in $STACK_STATUS - deleting before recreating..."
+            echo "Deleting failed stack..."
 
             aws cloudformation delete-stack \
               --stack-name "$STACK_NAME"
@@ -901,7 +1134,7 @@ jobs:
             aws cloudformation wait stack-delete-complete \
               --stack-name "$STACK_NAME"
 
-            echo "Deleted. Will recreate fresh."
+            echo "Stack deleted."
 
             echo "changeset_type=CREATE" >> "$GITHUB_OUTPUT"
 
@@ -913,16 +1146,18 @@ jobs:
 
 
       # ========================================================
-      # CREATE CHANGE SET
+      # CREATE PRODUCT CHANGE SET
       # ========================================================
 
       - name: Create change set
+
         run: |
 
           test -s "$TEMPLATE_FILE" || {
             echo "ERROR: $TEMPLATE_FILE is empty."
             exit 1
           }
+
 
           aws cloudformation create-change-set \
             --stack-name "$STACK_NAME" \
@@ -932,6 +1167,7 @@ jobs:
             --parameters \
               ParameterKey=Environment,ParameterValue=dev \
               ParameterKey=LambdaCodeKey,ParameterValue=dev/product/product-${{ github.sha }}.zip \
+              ParameterKey=AuthorizerCodeKey,ParameterValue=dev/authorizer/authorizer-${{ github.sha }}.zip \
               ParameterKey=SchemaApplyCodeKey,ParameterValue=dev/schema-apply/schema-apply-${{ github.sha }}.zip \
               ParameterKey=AlertEmail,ParameterValue=${{ secrets.ALERT_EMAIL }} \
             --capabilities CAPABILITY_NAMED_IAM
@@ -942,6 +1178,7 @@ jobs:
       # ========================================================
 
       - name: Wait for change set to be ready
+
         run: |
 
           for i in $(seq 1 20); do
@@ -967,7 +1204,8 @@ jobs:
 
             elif [ "$STATUS" = "FAILED" ]; then
 
-              if echo "$REASON" | grep -qi "didn't contain changes\|No updates"; then
+              if echo "$REASON" |
+                grep -qi "didn't contain changes\|No updates"; then
 
                 echo "No changes to deploy."
 
@@ -997,7 +1235,9 @@ jobs:
       # ========================================================
 
       - name: Execute change set
+
         if: env.ready == 'true'
+
         run: |
 
           aws cloudformation execute-change-set \
@@ -1009,8 +1249,10 @@ jobs:
       # WAIT FOR PRODUCT STACK
       # ========================================================
 
-      - name: Wait for stack to stabilize
+      - name: Wait for product stack
+
         if: env.ready == 'true'
+
         run: |
 
           for i in $(seq 1 40); do
@@ -1026,7 +1268,7 @@ jobs:
 
               CREATE_COMPLETE|UPDATE_COMPLETE)
 
-                echo "Stack healthy."
+                echo "Product stack healthy."
 
                 exit 0
                 ;;
@@ -1038,13 +1280,11 @@ jobs:
 
               *FAILED|*ROLLBACK_COMPLETE)
 
-                echo "Stack failed with status: $STATUS"
-
-                echo "--- Recent stack events ---"
+                echo "Stack failed: $STATUS"
 
                 aws cloudformation describe-stack-events \
                   --stack-name "$STACK_NAME" \
-                  --query 'StackEvents[:15].{Time:Timestamp,Status:ResourceStatus,Resource:LogicalResourceId,Reason:ResourceStatusReason}' \
+                  --query 'StackEvents[:20].{Time:Timestamp,Status:ResourceStatus,Resource:LogicalResourceId,Reason:ResourceStatusReason}' \
                   --output table
 
                 exit 1
@@ -1065,6 +1305,7 @@ jobs:
       # ========================================================
 
       - name: Apply RDS schema + sample data
+
         run: |
 
           aws lambda invoke \
@@ -1075,14 +1316,18 @@ jobs:
 
           cat schema-response.json
 
+
           python3 -c "
+
           import json
 
           body = json.load(
               open('schema-response.json')
           )
 
-          payload = json.loads(body['body'])
+          payload = json.loads(
+              body['body']
+          )
 
           assert payload['success'] is True, \
               f'Schema apply failed: {payload}'
@@ -1090,6 +1335,7 @@ jobs:
           print(
               f\"Schema applied: {payload['tables_applied']} tables.\"
           )
+
           "
 
 
@@ -1098,7 +1344,9 @@ jobs:
       # ========================================================
 
       - name: Read Product Function URL
+
         id: outputs
+
         run: |
 
           PRODUCT_URL=$(aws cloudformation describe-stacks \
@@ -1115,19 +1363,68 @@ jobs:
 
 
       # ========================================================
-      # SMOKE TEST 1
+      # READ AUTHORIZER FUNCTION URL
       # ========================================================
 
-      - name: Smoke test - no token returns 401
+      - name: Read Authorizer Function URL
+
+        id: authorizer
+
         run: |
 
-          URL="${{ steps.outputs.outputs.product_url }}products"
+          AUTHORIZER_URL=$(aws cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --query "Stacks[0].Outputs[?OutputKey=='AuthorizerFunctionUrl'].OutputValue" \
+            --output text)
+
+          test -n "$AUTHORIZER_URL" || {
+            echo "ERROR: Authorizer Function URL was not returned."
+            exit 1
+          }
+
+          echo "Authorizer Function URL exists."
+
+          echo "authorizer_url=$AUTHORIZER_URL" >> "$GITHUB_OUTPUT"
+
+
+      # ========================================================
+      # DIRECT AUTHORIZE TEST
+      #
+      # This confirms the URL we created is actually the
+      # Authorizer Lambda and not the Product Lambda.
+      # ========================================================
+
+      - name: Smoke test - Authorizer rejects missing token
+
+        run: |
 
           STATUS=$(curl \
             -s \
             -o /dev/null \
             -w "%{http_code}" \
-            "$URL")
+            "${{ steps.authorizer.outputs.authorizer_url }}")
+
+          echo "================================"
+          echo "Authorizer API status: $STATUS"
+          echo "Expected status: 401"
+          echo "================================"
+
+          test "$STATUS" -eq 401
+
+
+      # ========================================================
+      # PRODUCT TEST 1
+      # ========================================================
+
+      - name: Smoke test - Product without token returns 401
+
+        run: |
+
+          STATUS=$(curl \
+            -s \
+            -o /dev/null \
+            -w "%{http_code}" \
+            "${{ steps.outputs.outputs.product_url }}products")
 
           echo "================================"
           echo "Product API status: $STATUS"
@@ -1138,10 +1435,11 @@ jobs:
 
 
       # ========================================================
-      # SMOKE TEST 2
+      # PRODUCT TEST 2
       # ========================================================
 
-      - name: Smoke test - wrong token returns 401
+      - name: Smoke test - Product wrong token returns 401
+
         run: |
 
           STATUS=$(curl \
@@ -1151,17 +1449,20 @@ jobs:
             -H "Authorization: Bearer wrong-token" \
             "${{ steps.outputs.outputs.product_url }}products")
 
+          echo "================================"
           echo "Product API status: $STATUS"
           echo "Expected status: 401"
+          echo "================================"
 
           test "$STATUS" -eq 401
 
 
       # ========================================================
-      # SMOKE TEST 3
+      # PRODUCT TEST 3
       # ========================================================
 
-      - name: Smoke test - correct token returns 200
+      - name: Smoke test - Product correct token returns 200
+
         run: |
 
           STATUS=$(curl \
@@ -1171,30 +1472,42 @@ jobs:
             -H "Authorization: Bearer ${{ secrets.CLOUDMART_API_TOKEN }}" \
             "${{ steps.outputs.outputs.product_url }}products")
 
+          echo "================================"
           echo "Product API status: $STATUS"
           echo "Expected status: 200"
+          echo "================================"
 
           test "$STATUS" -eq 200
 
 
   # ============================================================
-  # JOB 6: SUMMARY
+  # JOB 6
+  # SUMMARY
   # ============================================================
 
   summary:
+
     name: Show All Exports
+
     runs-on: ubuntu-latest
-    needs: deploy-product
+
+    needs:
+      - deploy-product
+
     if: always()
+
 
     steps:
 
       - uses: aws-actions/configure-aws-credentials@v4
+
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ secrets.AWS_REGION }}
 
+
       - name: List all cloudmart-dev exports
+
         run: |
 
           aws cloudformation list-exports \

@@ -1,87 +1,140 @@
 """
-Shared authentication helper for CloudMart Lambdas.
+Shared authentication helper for CloudMart Product Lambda.
 
-Function URLs do not provide the API Gateway Lambda Authorizer
-construct used in the original architecture. Therefore authentication
-is performed inside the Lambda before any business logic executes.
+The Product Lambda does NOT validate the token directly.
 
-The authentication token is stored in SSM Parameter Store as a
-SecureString and retrieved using the Lambda execution role.
+Instead:
 
-A module-level cache is used so the token is not fetched from SSM
-on every warm Lambda invocation.
+Client
+   |
+   | Authorization: Bearer <token>
+   v
+Product Lambda
+   |
+   | HTTP request to AUTHORIZER_URL
+   | Authorization: Bearer <token>
+   v
+Authorizer Lambda
+   |
+   | reads token from SSM SecureString
+   v
+SSM Parameter Store
+
+The Authorizer Lambda returns:
+    200 + {"authorized": true}
+for a valid token.
+
+The Product Lambda returns:
+    401
+for missing/invalid authentication.
 """
 
+import json
 import os
-import time
-import boto3
+import urllib.error
+import urllib.request
 
 
-_ssm = boto3.client("ssm")
+AUTHORIZER_URL = os.environ["AUTHORIZER_URL"]
 
 
-_cache = {
-    "token": None,
-    "expires_at": 0
-}
-
-
-CACHE_TTL_SECONDS = 300
-
-
-def _get_valid_token():
-
-    now = time.time()
-
-    if (
-        _cache["token"]
-        and now < _cache["expires_at"]
-    ):
-        return _cache["token"]
-
-    param_name = os.environ["AUTH_TOKEN_PARAM"]
-
-    response = _ssm.get_parameter(
-        Name=param_name,
-        WithDecryption=True
-    )
-
-    _cache["token"] = response["Parameter"]["Value"]
-
-    _cache["expires_at"] = (
-        now + CACHE_TTL_SECONDS
-    )
-
-    return _cache["token"]
-
-
-def authorize(event) -> bool:
+def authorize_request(event):
     """
-    Validate the Bearer token supplied in the request.
+    Send the incoming Authorization header to the
+    dedicated Authorizer Lambda Function URL.
 
-    Returns True only when the supplied token matches the
-    SecureString stored in SSM Parameter Store.
+    Returns:
+        (True, 200)   -> authorization successful
+        (False, 401)  -> missing/invalid credentials
+        (False, 500)  -> authorizer/service failure
     """
 
     headers = event.get("headers") or {}
 
-    auth_header = (
-        headers.get("authorization")
-        or headers.get("Authorization")
+    authorization = (
+        headers.get("Authorization")
+        or headers.get("authorization")
     )
 
-    if (
-        not auth_header
-        or not auth_header.startswith("Bearer ")
-    ):
-        return False
+    # ---------------------------------------------------------
+    # No Authorization header
+    # ---------------------------------------------------------
 
-    provided = (
-        auth_header
-        .split("Bearer ", 1)[1]
-        .strip()
+    if not authorization:
+        return False, 401
+
+    # ---------------------------------------------------------
+    # Call the Authorizer Lambda Function URL
+    # ---------------------------------------------------------
+
+    request = urllib.request.Request(
+        AUTHORIZER_URL,
+        method="GET",
+        headers={
+            "Authorization": authorization
+        }
     )
 
-    valid_token = _get_valid_token()
+    try:
 
-    return provided == valid_token
+        with urllib.request.urlopen(
+            request,
+            timeout=5
+        ) as response:
+
+            status_code = response.status
+
+            # -------------------------------------------------
+            # Authorizer accepted the token
+            # -------------------------------------------------
+
+            if status_code == 200:
+
+                body = response.read().decode("utf-8")
+
+                try:
+                    result = json.loads(body)
+
+                except json.JSONDecodeError:
+                    return False, 401
+
+                if result.get("authorized") is True:
+                    return True, 200
+
+                return False, 401
+
+            # -------------------------------------------------
+            # Authorizer rejected the token
+            # -------------------------------------------------
+
+            if status_code == 401:
+                return False, 401
+
+            # -------------------------------------------------
+            # Unexpected authorizer response
+            # -------------------------------------------------
+
+            return False, 500
+
+    except urllib.error.HTTPError as error:
+
+        if error.code == 401:
+            return False, 401
+
+        return False, 500
+
+    except Exception:
+        return False, 500
+
+
+def authorize(event):
+    """
+    Compatibility wrapper used by product/handler.py.
+
+    The actual authorization is performed by the
+    dedicated Authorizer Lambda Function URL.
+    """
+
+    authorized, _status = authorize_request(event)
+
+    return authorized
