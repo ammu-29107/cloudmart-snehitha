@@ -42,6 +42,7 @@ Resources:
   # Schema-apply Lambda — runs inside the VPC to apply RDS DDL,
   # since the GitHub Actions runner cannot reach RDS directly.
   # ============================================================
+
   SchemaApplyRole:
     Type: AWS::IAM::Role
     Properties:
@@ -95,6 +96,7 @@ Resources:
   # ============================================================
   # Product Lambda
   # ============================================================
+
   ProductLambdaRole:
     Type: AWS::IAM::Role
     Properties:
@@ -130,7 +132,7 @@ Resources:
                 Action:
                   - ec2:CreateNetworkInterface
                   - ec2:DescribeNetworkInterfaces
-                  - ec2:DeleteNetworkInterfaces
+                  - ec2:DeleteNetworkInterface
                 Resource: '*'
 
   ProductLambda:
@@ -156,6 +158,9 @@ Resources:
           DB_HOST:
             Fn::ImportValue: !Sub cloudmart-${Environment}-rds-endpoint
           DB_NAME: cloudmart
+          DB_USER: cloudmart_admin
+          DB_PASSWORD:
+            Fn::Sub: '{{resolve:ssm-secure:/cloudmart/${Environment}/database/password}}'
           AUTH_TOKEN_PARAM: !Sub /cloudmart/${Environment}/auth/token
           LOW_STOCK_THRESHOLD_PARAM: !Sub /cloudmart/${Environment}/inventory/low-stock-threshold
           LOW_STOCK_TOPIC_ARN: !Ref LowStockTopic
@@ -179,21 +184,11 @@ Resources:
       Principal: '*'
       FunctionUrlAuthType: NONE
 
-  ProductFunctionInvokePermission:
-    Type: AWS::Lambda::Permission
-    Properties:
-      FunctionName: !Ref ProductLambda
-      Action: lambda:InvokeFunction
-      Principal: '*'
-      InvokedViaFunctionUrl: true
-
 Outputs:
   ProductFunctionUrl:
     Value: !GetAtt ProductFunctionUrl.FunctionUrl
-    Export:
-      Name: !Sub 'cloudmart-${Environment}-product-function-url'
+    Export: {Name: !Sub 'cloudmart-${Environment}-product-function-url'}
 
   SchemaApplyFunctionName:
     Value: !Ref SchemaApplyFunction
-    Export:
-      Name: !Sub 'cloudmart-${Environment}-schema-apply-function'
+    Export: {Name: !Sub 'cloudmart-${Environment}-schema-apply-function'}
