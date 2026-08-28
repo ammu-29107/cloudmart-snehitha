@@ -942,10 +942,6 @@ jobs:
 
       # ========================================================
       # AUTHENTICATION TOKEN
-      #
-      # Stored as SSM SecureString.
-      #
-      # CloudFormation receives only the parameter name.
       # ========================================================
 
       - name: Write auth token SecureString
@@ -1013,14 +1009,6 @@ jobs:
 
       # ========================================================
       # PACKAGE PRODUCT LAMBDA
-      #
-      # Result:
-      #
-      # build/product/
-      #   handler.py
-      #   shared/
-      #   pymysql/
-      #   ...
       # ========================================================
 
       - name: Package Product Lambda
@@ -1050,11 +1038,6 @@ jobs:
 
       # ========================================================
       # PACKAGE AUTHORIZER LAMBDA
-      #
-      # Result:
-      #
-      # build/authorizer/
-      #   lambda_function.py
       # ========================================================
 
       - name: Package Authorizer Lambda
@@ -1147,6 +1130,16 @@ jobs:
 
       # ========================================================
       # CREATE PRODUCT CHANGE SET
+      #
+      # IMPORTANT:
+      # The product stack is now responsible only for the
+      # resources defined in product-stack.yaml.
+      #
+      # The authorizer is NOT treated as an existing external
+      # Lambda. Its Lambda code is still packaged here because
+      # product-stack.yaml creates the authorizer resources.
+      #
+      # Do NOT pass an AuthorizerFunctionArn parameter.
       # ========================================================
 
       - name: Create change set
@@ -1204,6 +1197,19 @@ jobs:
 
             elif [ "$STATUS" = "FAILED" ]; then
 
+              echo "Change set failed."
+              echo "Reason: $REASON"
+
+              # ------------------------------------------------
+              # PRINT DETAILED CHANGE SET EVENTS
+              # ------------------------------------------------
+
+              aws cloudformation describe-events \
+                --stack-name "$STACK_NAME" \
+                --change-set-name "$CHANGESET_NAME" \
+                --region "${{ secrets.AWS_REGION }}" \
+                --output table 2>/dev/null || true
+
               if echo "$REASON" |
                 grep -qi "didn't contain changes\|No updates"; then
 
@@ -1214,8 +1220,6 @@ jobs:
                 break
 
               else
-
-                echo "Change set failed: $REASON"
 
                 exit 1
 
@@ -1389,9 +1393,6 @@ jobs:
 
       # ========================================================
       # DIRECT AUTHORIZE TEST
-      #
-      # This confirms the URL we created is actually the
-      # Authorizer Lambda and not the Product Lambda.
       # ========================================================
 
       - name: Smoke test - Authorizer rejects missing token

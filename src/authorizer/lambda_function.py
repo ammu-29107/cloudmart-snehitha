@@ -9,6 +9,7 @@ import boto3
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
+
 ssm = boto3.client("ssm")
 
 
@@ -38,9 +39,7 @@ def lambda_handler(event, context):
         json.dumps(
             {
                 "request_id": request_id,
-                "event": (
-                    "authorizer_request_received"
-                ),
+                "event": "authorizer_request_received",
                 "environment": ENVIRONMENT
             }
         )
@@ -55,9 +54,9 @@ def lambda_handler(event, context):
             or headers.get("authorization")
         )
 
-        # -----------------------------------------------------
-        # Missing token
-        # -----------------------------------------------------
+        # --------------------------------------------------------
+        # Missing Authorization header
+        # --------------------------------------------------------
 
         if not authorization:
 
@@ -66,9 +65,7 @@ def lambda_handler(event, context):
                     {
                         "request_id": request_id,
                         "event": "authorization_failed",
-                        "reason": (
-                            "missing_authorization_header"
-                        )
+                        "reason": "missing_authorization_header"
                     }
                 )
             )
@@ -76,6 +73,7 @@ def lambda_handler(event, context):
             return response(
                 401,
                 {
+                    "authorized": False,
                     "error": {
                         "code": "UNAUTHORIZED",
                         "message": (
@@ -86,9 +84,9 @@ def lambda_handler(event, context):
                 }
             )
 
-        # -----------------------------------------------------
+        # --------------------------------------------------------
         # Invalid authentication scheme
-        # -----------------------------------------------------
+        # --------------------------------------------------------
 
         if not authorization.startswith(
             "Bearer "
@@ -109,6 +107,7 @@ def lambda_handler(event, context):
             return response(
                 401,
                 {
+                    "authorized": False,
                     "error": {
                         "code": "UNAUTHORIZED",
                         "message": (
@@ -119,9 +118,9 @@ def lambda_handler(event, context):
                 }
             )
 
-        # -----------------------------------------------------
+        # --------------------------------------------------------
         # Extract token
-        # -----------------------------------------------------
+        # --------------------------------------------------------
 
         supplied_token = (
             authorization[7:].strip()
@@ -132,6 +131,7 @@ def lambda_handler(event, context):
             return response(
                 401,
                 {
+                    "authorized": False,
                     "error": {
                         "code": "UNAUTHORIZED",
                         "message": (
@@ -142,9 +142,9 @@ def lambda_handler(event, context):
                 }
             )
 
-        # -----------------------------------------------------
-        # Retrieve expected token from SSM SecureString
-        # -----------------------------------------------------
+        # --------------------------------------------------------
+        # Read expected token from SSM SecureString
+        # --------------------------------------------------------
 
         parameter = ssm.get_parameter(
             Name=AUTH_TOKEN_PARAM,
@@ -155,9 +155,9 @@ def lambda_handler(event, context):
             parameter["Parameter"]["Value"]
         )
 
-        # -----------------------------------------------------
+        # --------------------------------------------------------
         # Constant-time token comparison
-        # -----------------------------------------------------
+        # --------------------------------------------------------
 
         if not secrets.compare_digest(
             supplied_token,
@@ -177,6 +177,7 @@ def lambda_handler(event, context):
             return response(
                 401,
                 {
+                    "authorized": False,
                     "error": {
                         "code": "UNAUTHORIZED",
                         "message": (
@@ -187,9 +188,9 @@ def lambda_handler(event, context):
                 }
             )
 
-        # -----------------------------------------------------
-        # Successful authorization
-        # -----------------------------------------------------
+        # --------------------------------------------------------
+        # Authorized
+        # --------------------------------------------------------
 
         logger.info(
             json.dumps(
@@ -224,6 +225,7 @@ def lambda_handler(event, context):
         return response(
             500,
             {
+                "authorized": False,
                 "error": {
                     "code": "INTERNAL_ERROR",
                     "message": (

@@ -19,51 +19,48 @@ sns = boto3.client("sns")
 ssm = boto3.client("ssm")
 
 
-# ============================================================
-# LOGGING
-# ============================================================
-
 def log_json(**kwargs):
     """Structured JSON logging."""
-    logger.info(json.dumps(kwargs, default=str))
+    logger.info(json.dumps(kwargs))
 
 
-# ============================================================
-# DATABASE
-# ============================================================
+def get_ssm_parameter(name, decrypt=False):
+    response = ssm.get_parameter(
+        Name=name,
+        WithDecryption=decrypt
+    )
+
+    return response["Parameter"]["Value"]
+
 
 def get_db_connection():
 
-    db_host = ssm.get_parameter(
-        Name=os.environ["DB_HOST_PARAM"]
-    )["Parameter"]["Value"]
+    host = get_ssm_parameter(
+        os.environ["DB_HOST_PARAM"]
+    )
 
-    db_name = ssm.get_parameter(
-        Name=os.environ["DB_NAME_PARAM"]
-    )["Parameter"]["Value"]
+    database = get_ssm_parameter(
+        os.environ["DB_NAME_PARAM"]
+    )
 
-    db_user = ssm.get_parameter(
-        Name=os.environ["DB_USER_PARAM"]
-    )["Parameter"]["Value"]
+    username = get_ssm_parameter(
+        os.environ["DB_USER_PARAM"]
+    )
 
-    db_password = ssm.get_parameter(
-        Name=os.environ["DB_PASSWORD_PARAM"],
-        WithDecryption=True
-    )["Parameter"]["Value"]
+    password = get_ssm_parameter(
+        os.environ["DB_PASSWORD_PARAM"],
+        decrypt=True
+    )
 
     return pymysql.connect(
-        host=db_host,
-        user=db_user,
-        password=db_password,
-        db=db_name,
+        host=host,
+        user=username,
+        password=password,
+        database=database,
         cursorclass=pymysql.cursors.DictCursor,
         connect_timeout=10,
     )
 
-
-# ============================================================
-# RESPONSE
-# ============================================================
 
 def respond(status, body, request_id):
 
@@ -78,23 +75,28 @@ def respond(status, body, request_id):
                 "request_id": request_id
             },
             default=str
-        ),
+        )
     }
 
-
-# ============================================================
-# MAIN HANDLER
-# ============================================================
 
 def handler(event, context):
 
     request_id = str(uuid.uuid4())[:8]
 
     request_context = event.get("requestContext") or {}
+
     http_context = request_context.get("http") or {}
 
-    method = http_context.get("method")
-    path = event.get("rawPath", "")
+    method = (
+        http_context.get("method")
+        or event.get("httpMethod")
+    )
+
+    path = (
+        event.get("rawPath")
+        or event.get("path")
+        or ""
+    )
 
     log_json(
         request_id=request_id,
@@ -103,12 +105,12 @@ def handler(event, context):
         path=path
     )
 
-    # ========================================================
+    # ============================================================
     # AUTHENTICATION
     #
-    # Product Lambda calls the dedicated Authorizer Lambda
-    # through its Function URL.
-    # ========================================================
+    # Product Lambda delegates token validation to the
+    # dedicated Authorizer Lambda Function URL.
+    # ============================================================
 
     if not authorize(event):
 
@@ -129,26 +131,41 @@ def handler(event, context):
             request_id
         )
 
-    # ========================================================
-    # ROUTING
-    # ========================================================
+    # ============================================================
+    # BUSINESS ROUTING
+    # ============================================================
 
     try:
 
         if method == "POST" and path == "/products":
-            return create_product(event, request_id)
+            return create_product(
+                event,
+                request_id
+            )
 
         if method == "GET" and path.startswith("/products/"):
-            return get_product(event, request_id)
+            return get_product(
+                event,
+                request_id
+            )
 
         if method == "GET" and path == "/products":
-            return list_products(event, request_id)
+            return list_products(
+                event,
+                request_id
+            )
 
         if method == "PUT" and path.startswith("/products/"):
-            return update_product(event, request_id)
+            return update_product(
+                event,
+                request_id
+            )
 
         if method == "DELETE" and path.startswith("/products/"):
-            return deactivate_product(event, request_id)
+            return deactivate_product(
+                event,
+                request_id
+            )
 
         return respond(
             404,
@@ -167,8 +184,8 @@ def handler(event, context):
         log_json(
             request_id=request_id,
             event="unhandled_error",
-            error_type=type(exc).__name__,
-            error=str(exc)
+            error=str(exc),
+            error_type=type(exc).__name__
         )
 
         return respond(
@@ -184,18 +201,12 @@ def handler(event, context):
         )
 
 
-# ============================================================
-# LOW STOCK
-# ============================================================
-
 def get_low_stock_threshold():
 
-    parameter = ssm.get_parameter(
-        Name=os.environ["LOW_STOCK_THRESHOLD_PARAM"]
-    )
-
     return int(
-        parameter["Parameter"]["Value"]
+        get_ssm_parameter(
+            os.environ["LOW_STOCK_THRESHOLD_PARAM"]
+        )
     )
 
 
@@ -226,15 +237,14 @@ def publish_low_stock_alert(
                         "event_type": "LowStockEvents",
                         "source": "cloudmart.product",
                         "event_time": (
-                            datetime.datetime.now(
-                                datetime.timezone.utc
-                            ).isoformat()
+                            datetime.datetime.utcnow().isoformat()
+                            + "Z"
                         ),
                         "environment": os.environ["ENVIRONMENT"],
                         "detail": {
                             "product_id": product_id,
                             "stock_quantity": stock_quantity
-                        },
+                        }
                     }
                 ),
             }
@@ -248,10 +258,6 @@ def publish_low_stock_alert(
         stock_quantity=stock_quantity
     )
 
-
-# ============================================================
-# CREATE PRODUCT
-# ============================================================
 
 def create_product(event, request_id):
 
@@ -297,7 +303,7 @@ def create_product(event, request_id):
                 SELECT category_id
                 FROM categories
                 WHERE category_id=%s
-                  AND status='ACTIVE'
+                AND status='ACTIVE'
                 """,
                 (body["category_id"],)
             )
@@ -339,7 +345,7 @@ def create_product(event, request_id):
                     body.get("description"),
                     body["price"],
                     body["stock_quantity"],
-                    body.get("status", "ACTIVE"),
+                    body.get("status", "ACTIVE")
                 ),
             )
 
@@ -360,6 +366,7 @@ def create_product(event, request_id):
         body["stock_quantity"]
         <= get_low_stock_threshold()
     ):
+
         publish_low_stock_alert(
             product_id,
             body["stock_quantity"],
@@ -379,14 +386,11 @@ def create_product(event, request_id):
     )
 
 
-# ============================================================
-# GET PRODUCT
-# ============================================================
-
 def get_product(event, request_id):
 
     path_parameters = (
-        event.get("pathParameters") or {}
+        event.get("pathParameters")
+        or {}
     )
 
     product_id = path_parameters.get(
@@ -395,17 +399,12 @@ def get_product(event, request_id):
 
     if not product_id:
 
-        return respond(
-            400,
-            {
-                "success": False,
-                "error": {
-                    "code": "INVALID_PRODUCT_ID",
-                    "message": "productId is required"
-                }
-            },
-            request_id
+        path = (
+            event.get("rawPath")
+            or ""
         )
+
+        product_id = path.rstrip("/").split("/")[-1]
 
     conn = get_db_connection()
 
@@ -436,7 +435,8 @@ def get_product(event, request_id):
                 "error": {
                     "code": "PRODUCT_NOT_FOUND",
                     "message": (
-                        f"product_id {product_id} "
+                        f"product_id "
+                        f"{product_id} "
                         f"does not exist"
                     )
                 }
@@ -453,10 +453,6 @@ def get_product(event, request_id):
         request_id
     )
 
-
-# ============================================================
-# LIST PRODUCTS
-# ============================================================
 
 def list_products(event, request_id):
 
@@ -484,9 +480,7 @@ def list_products(event, request_id):
 
     if category_id:
 
-        query += """
-            AND category_id=%s
-        """
+        query += " AND category_id=%s"
 
         params.append(category_id)
 
@@ -516,19 +510,25 @@ def list_products(event, request_id):
     )
 
 
-# ============================================================
-# UPDATE PRODUCT
-# ============================================================
-
 def update_product(event, request_id):
 
     path_parameters = (
-        event.get("pathParameters") or {}
+        event.get("pathParameters")
+        or {}
     )
 
     product_id = path_parameters.get(
         "productId"
     )
+
+    if not product_id:
+
+        path = (
+            event.get("rawPath")
+            or ""
+        )
+
+        product_id = path.rstrip("/").split("/")[-1]
 
     body = json.loads(
         event.get("body") or "{}"
@@ -560,7 +560,8 @@ def update_product(event, request_id):
                         "error": {
                             "code": "PRODUCT_NOT_FOUND",
                             "message": (
-                                f"product_id {product_id} "
+                                f"product_id "
+                                f"{product_id} "
                                 f"does not exist"
                             )
                         }
@@ -575,15 +576,9 @@ def update_product(event, request_id):
 
             new_status = existing["status"]
 
-            # Zero-stock business rule:
-            # deactivate instead of deleting.
+            # Zero-stock business rule
             if new_stock == 0:
                 new_status = "INACTIVE"
-
-            new_status = body.get(
-                "status",
-                new_status
-            )
 
             cur.execute(
                 """
@@ -616,8 +611,11 @@ def update_product(event, request_id):
                         existing["price"]
                     ),
                     new_stock,
-                    new_status,
-                    product_id,
+                    body.get(
+                        "status",
+                        new_status
+                    ),
+                    product_id
                 ),
             )
 
@@ -658,19 +656,25 @@ def update_product(event, request_id):
     )
 
 
-# ============================================================
-# DEACTIVATE PRODUCT
-# ============================================================
-
 def deactivate_product(event, request_id):
 
     path_parameters = (
-        event.get("pathParameters") or {}
+        event.get("pathParameters")
+        or {}
     )
 
     product_id = path_parameters.get(
         "productId"
     )
+
+    if not product_id:
+
+        path = (
+            event.get("rawPath")
+            or ""
+        )
+
+        product_id = path.rstrip("/").split("/")[-1]
 
     conn = get_db_connection()
 
@@ -698,7 +702,8 @@ def deactivate_product(event, request_id):
                         "error": {
                             "code": "PRODUCT_NOT_FOUND",
                             "message": (
-                                f"product_id {product_id} "
+                                f"product_id "
+                                f"{product_id} "
                                 f"does not exist"
                             )
                         }
@@ -713,11 +718,10 @@ def deactivate_product(event, request_id):
                     {
                         "success": False,
                         "error": {
-                            "code": (
-                                "PRODUCT_ALREADY_INACTIVE"
-                            ),
+                            "code": "PRODUCT_ALREADY_INACTIVE",
                             "message": (
-                                f"product_id {product_id} "
+                                f"product_id "
+                                f"{product_id} "
                                 f"is already INACTIVE"
                             )
                         }
