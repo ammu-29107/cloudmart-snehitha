@@ -899,7 +899,7 @@ jobs:
           done
 
 
-  # ============================================================
+    # ============================================================
   # JOB 5
   # PRODUCT STACK
   # ============================================================
@@ -928,24 +928,21 @@ jobs:
 
 
       - uses: actions/setup-python@v5
-
         with:
           python-version: "3.12"
 
 
       - uses: aws-actions/configure-aws-credentials@v4
-
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ secrets.AWS_REGION }}
 
 
       # ========================================================
-      # AUTHENTICATION TOKEN
+      # AUTH TOKEN
       # ========================================================
 
       - name: Write auth token SecureString
-
         run: |
 
           aws ssm put-parameter \
@@ -960,7 +957,6 @@ jobs:
       # ========================================================
 
       - name: Write low-stock threshold parameter
-
         run: |
 
           aws ssm put-parameter \
@@ -989,15 +985,16 @@ jobs:
             exit 1
           }
 
+          echo "Lambda artifact bucket: $BUCKET"
+
           echo "name=$BUCKET" >> "$GITHUB_OUTPUT"
 
 
       # ========================================================
-      # CLEAN BUILD DIRECTORIES
+      # PREPARE BUILD DIRECTORIES
       # ========================================================
 
       - name: Prepare Lambda build directories
-
         run: |
 
           rm -rf build
@@ -1008,12 +1005,21 @@ jobs:
 
 
       # ========================================================
-      # PACKAGE PRODUCT LAMBDA
+      # PACKAGE PRODUCT
       # ========================================================
 
       - name: Package Product Lambda
-
         run: |
+
+          test -f src/product/handler.py || {
+            echo "ERROR: src/product/handler.py not found."
+            exit 1
+          }
+
+          test -d src/shared || {
+            echo "ERROR: src/shared directory not found."
+            exit 1
+          }
 
           cp src/product/handler.py \
             build/product/handler.py
@@ -1037,12 +1043,16 @@ jobs:
 
 
       # ========================================================
-      # PACKAGE AUTHORIZER LAMBDA
+      # PACKAGE AUTHORIZER
       # ========================================================
 
       - name: Package Authorizer Lambda
-
         run: |
+
+          test -f src/authorizer/lambda_function.py || {
+            echo "ERROR: src/authorizer/lambda_function.py not found."
+            exit 1
+          }
 
           cp src/authorizer/lambda_function.py \
             build/authorizer/lambda_function.py
@@ -1059,12 +1069,16 @@ jobs:
 
 
       # ========================================================
-      # PACKAGE SCHEMA APPLY LAMBDA
+      # PACKAGE SCHEMA APPLY
       # ========================================================
 
       - name: Package schema-apply Lambda
-
         run: |
+
+          test -f src/schema-apply/handler.py || {
+            echo "ERROR: src/schema-apply/handler.py not found."
+            exit 1
+          }
 
           cp src/schema-apply/handler.py \
             build/schema-apply/handler.py
@@ -1085,7 +1099,7 @@ jobs:
 
 
       # ========================================================
-      # DETERMINE CHANGE SET TYPE
+      # CHECK EXISTING PRODUCT STACK
       # ========================================================
 
       - name: Determine change set type
@@ -1099,51 +1113,66 @@ jobs:
             --query 'Stacks[0].StackStatus' \
             --output text 2>/dev/null || echo "NOT_FOUND")
 
-          echo "Current stack status: $STACK_STATUS"
+          echo "Current product stack status: $STACK_STATUS"
 
-          if [ "$STACK_STATUS" = "NOT_FOUND" ] ||
-             [ "$STACK_STATUS" = "REVIEW_IN_PROGRESS" ]; then
 
-            echo "changeset_type=CREATE" >> "$GITHUB_OUTPUT"
+          case "$STACK_STATUS" in
 
-          elif [ "$STACK_STATUS" = "ROLLBACK_COMPLETE" ] ||
-               [ "$STACK_STATUS" = "ROLLBACK_FAILED" ]; then
+            NOT_FOUND|REVIEW_IN_PROGRESS)
 
-            echo "Deleting failed stack..."
+              echo "changeset_type=CREATE" >> "$GITHUB_OUTPUT"
+              ;;
 
-            aws cloudformation delete-stack \
-              --stack-name "$STACK_NAME"
 
-            aws cloudformation wait stack-delete-complete \
-              --stack-name "$STACK_NAME"
+            ROLLBACK_COMPLETE|ROLLBACK_FAILED)
 
-            echo "Stack deleted."
+              echo "Deleting failed product stack..."
 
-            echo "changeset_type=CREATE" >> "$GITHUB_OUTPUT"
+              aws cloudformation delete-stack \
+                --stack-name "$STACK_NAME"
 
-          else
+              aws cloudformation wait stack-delete-complete \
+                --stack-name "$STACK_NAME"
 
-            echo "changeset_type=UPDATE" >> "$GITHUB_OUTPUT"
+              echo "Stack deleted."
 
-          fi
+              echo "changeset_type=CREATE" >> "$GITHUB_OUTPUT"
+              ;;
+
+
+            UPDATE_ROLLBACK_IN_PROGRESS|UPDATE_ROLLBACK_FAILED|UPDATE_ROLLBACK_COMPLETE_CLEANUP_IN_PROGRESS|UPDATE_COMPLETE_CLEANUP_IN_PROGRESS)
+
+              echo "ERROR: Product stack is currently in an unstable CloudFormation state."
+              echo "Current state: $STACK_STATUS"
+              echo ""
+              echo "Resolve the stack state before running this deployment again."
+
+              exit 1
+              ;;
+
+
+            CREATE_IN_PROGRESS|UPDATE_IN_PROGRESS|IMPORT_IN_PROGRESS|IMPORT_ROLLBACK_IN_PROGRESS)
+
+              echo "ERROR: Product stack is already being modified."
+              echo "Current state: $STACK_STATUS"
+
+              exit 1
+              ;;
+
+
+            *)
+
+              echo "changeset_type=UPDATE" >> "$GITHUB_OUTPUT"
+              ;;
+
+          esac
 
 
       # ========================================================
-      # CREATE PRODUCT CHANGE SET
-      #
-      # IMPORTANT:
-      # The product stack is now responsible only for the
-      # resources defined in product-stack.yaml.
-      #
-      # The authorizer is NOT treated as an existing external
-      # Lambda. Its Lambda code is still packaged here because
-      # product-stack.yaml creates the authorizer resources.
-      #
-      # Do NOT pass an AuthorizerFunctionArn parameter.
+      # CREATE CHANGE SET
       # ========================================================
 
-      - name: Create change set
-
+      - name: Create product change set
         run: |
 
           test -s "$TEMPLATE_FILE" || {
@@ -1170,8 +1199,7 @@ jobs:
       # WAIT FOR CHANGE SET
       # ========================================================
 
-      - name: Wait for change set to be ready
-
+      - name: Wait for change set
         run: |
 
           for i in $(seq 1 20); do
@@ -1200,16 +1228,6 @@ jobs:
               echo "Change set failed."
               echo "Reason: $REASON"
 
-              # ------------------------------------------------
-              # PRINT DETAILED CHANGE SET EVENTS
-              # ------------------------------------------------
-
-              aws cloudformation describe-events \
-                --stack-name "$STACK_NAME" \
-                --change-set-name "$CHANGESET_NAME" \
-                --region "${{ secrets.AWS_REGION }}" \
-                --output table 2>/dev/null || true
-
               if echo "$REASON" |
                 grep -qi "didn't contain changes\|No updates"; then
 
@@ -1235,7 +1253,7 @@ jobs:
 
 
       # ========================================================
-      # EXECUTE CHANGE SET
+      # EXECUTE
       # ========================================================
 
       - name: Execute change set
@@ -1277,14 +1295,16 @@ jobs:
                 exit 0
                 ;;
 
+
               *IN_PROGRESS)
 
                 sleep 30
                 ;;
 
+
               *FAILED|*ROLLBACK_COMPLETE)
 
-                echo "Stack failed: $STATUS"
+                echo "Product stack failed: $STATUS"
 
                 aws cloudformation describe-stack-events \
                   --stack-name "$STACK_NAME" \
@@ -1294,6 +1314,7 @@ jobs:
                 exit 1
                 ;;
 
+
               *)
 
                 sleep 30
@@ -1302,6 +1323,10 @@ jobs:
             esac
 
           done
+
+          echo "ERROR: Product stack did not reach a stable state within the expected time."
+
+          exit 1
 
 
       # ========================================================
@@ -1325,12 +1350,12 @@ jobs:
 
           import json
 
-          body = json.load(
+          response = json.load(
               open('schema-response.json')
           )
 
           payload = json.loads(
-              body['body']
+              response['body']
           )
 
           assert payload['success'] is True, \
@@ -1344,7 +1369,7 @@ jobs:
 
 
       # ========================================================
-      # READ PRODUCT FUNCTION URL
+      # READ PRODUCT URL
       # ========================================================
 
       - name: Read Product Function URL
@@ -1363,11 +1388,13 @@ jobs:
             exit 1
           }
 
+          echo "Product URL: $PRODUCT_URL"
+
           echo "product_url=$PRODUCT_URL" >> "$GITHUB_OUTPUT"
 
 
       # ========================================================
-      # READ AUTHORIZER FUNCTION URL
+      # READ AUTHORIZER URL
       # ========================================================
 
       - name: Read Authorizer Function URL
@@ -1386,13 +1413,13 @@ jobs:
             exit 1
           }
 
-          echo "Authorizer Function URL exists."
+          echo "Authorizer URL exists."
 
           echo "authorizer_url=$AUTHORIZER_URL" >> "$GITHUB_OUTPUT"
 
 
       # ========================================================
-      # DIRECT AUTHORIZE TEST
+      # AUTHORIZER TEST
       # ========================================================
 
       - name: Smoke test - Authorizer rejects missing token
@@ -1405,16 +1432,13 @@ jobs:
             -w "%{http_code}" \
             "${{ steps.authorizer.outputs.authorizer_url }}")
 
-          echo "================================"
-          echo "Authorizer API status: $STATUS"
-          echo "Expected status: 401"
-          echo "================================"
+          echo "Authorizer status: $STATUS"
 
           test "$STATUS" -eq 401
 
 
       # ========================================================
-      # PRODUCT TEST 1
+      # PRODUCT TEST - NO TOKEN
       # ========================================================
 
       - name: Smoke test - Product without token returns 401
@@ -1427,16 +1451,13 @@ jobs:
             -w "%{http_code}" \
             "${{ steps.outputs.outputs.product_url }}products")
 
-          echo "================================"
-          echo "Product API status: $STATUS"
-          echo "Expected status: 401"
-          echo "================================"
+          echo "Product status without token: $STATUS"
 
           test "$STATUS" -eq 401
 
 
       # ========================================================
-      # PRODUCT TEST 2
+      # PRODUCT TEST - WRONG TOKEN
       # ========================================================
 
       - name: Smoke test - Product wrong token returns 401
@@ -1450,16 +1471,13 @@ jobs:
             -H "Authorization: Bearer wrong-token" \
             "${{ steps.outputs.outputs.product_url }}products")
 
-          echo "================================"
-          echo "Product API status: $STATUS"
-          echo "Expected status: 401"
-          echo "================================"
+          echo "Product status with wrong token: $STATUS"
 
           test "$STATUS" -eq 401
 
 
       # ========================================================
-      # PRODUCT TEST 3
+      # PRODUCT TEST - CORRECT TOKEN
       # ========================================================
 
       - name: Smoke test - Product correct token returns 200
@@ -1473,10 +1491,7 @@ jobs:
             -H "Authorization: Bearer ${{ secrets.CLOUDMART_API_TOKEN }}" \
             "${{ steps.outputs.outputs.product_url }}products")
 
-          echo "================================"
-          echo "Product API status: $STATUS"
-          echo "Expected status: 200"
-          echo "================================"
+          echo "Product status with correct token: $STATUS"
 
           test "$STATUS" -eq 200
 

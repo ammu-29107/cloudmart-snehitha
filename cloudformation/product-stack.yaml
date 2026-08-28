@@ -1,9 +1,17 @@
 AWSTemplateFormatVersion: '2010-09-09'
 
 Description: >
-  CloudMart product service with a dedicated Lambda-based
-  authorization service. Product Lambda and Authorizer Lambda
-  both use Lambda Function URLs. No API Gateway and no auth-stack.
+  CloudMart product application stack.
+  Creates Product Lambda, dedicated Authorizer Lambda,
+  Schema Apply Lambda, Lambda Function URLs, IAM roles,
+  and low-stock SNS notification resources.
+  The Authorizer is owned by this stack; no separate auth-stack
+  and no API Gateway are used.
+
+
+# ================================================================
+# PARAMETERS
+# ================================================================
 
 Parameters:
 
@@ -27,20 +35,28 @@ Parameters:
     Type: String
 
 
+# ================================================================
+# RESOURCES
+# ================================================================
+
 Resources:
 
-  # ============================================================
+
+  # ==============================================================
   # AUTHORIZE LAMBDA ROLE
-  # ============================================================
+  # ==============================================================
 
   AuthorizerLambdaRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub cloudmart-${Environment}-authorizer-role
+
+      RoleName:
+        !Sub cloudmart-${Environment}-authorizer-role
 
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
+
           - Effect: Allow
             Principal:
               Service:
@@ -48,7 +64,15 @@ Resources:
             Action:
               - sts:AssumeRole
 
+      ManagedPolicyArns:
+
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+
       Policies:
+
+        # --------------------------------------------------------
+        # SSM AUTH TOKEN
+        # --------------------------------------------------------
 
         - PolicyName: AuthorizerSSMRead
           PolicyDocument:
@@ -59,7 +83,13 @@ Resources:
                 Action:
                   - ssm:GetParameter
                 Resource:
-                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudmart/${Environment}/auth/token
+                  - !Sub >
+                    arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudmart/${Environment}/auth/token
+
+
+        # --------------------------------------------------------
+        # CLOUDWATCH LOGGING
+        # --------------------------------------------------------
 
         - PolicyName: AuthorizerLogging
           PolicyDocument:
@@ -72,29 +102,49 @@ Resources:
                   - logs:CreateLogStream
                   - logs:PutLogEvents
                 Resource:
-                  - !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:*
+                  - !Sub >
+                    arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:*
 
 
-  # ============================================================
+  # ==============================================================
   # AUTHORIZE LAMBDA
-  # ============================================================
+  # ==============================================================
 
   AuthorizerFunction:
     Type: AWS::Lambda::Function
     Properties:
-      FunctionName: !Sub cloudmart-${Environment}-authorizer
 
-      Runtime: python3.12
+      FunctionName:
+        !Sub cloudmart-${Environment}-authorizer
 
-      Handler: lambda_function.lambda_handler
+      Runtime:
+        python3.12
 
-      Role: !GetAtt AuthorizerLambdaRole.Arn
+      Handler:
+        lambda_function.lambda_handler
+
+      Role:
+        !GetAtt AuthorizerLambdaRole.Arn
 
       Timeout: 10
 
       MemorySize: 128
 
+      # ----------------------------------------------------------
+      # PRIVATE SUBNET
+      # ----------------------------------------------------------
+
+      VpcConfig:
+        SubnetIds:
+          - Fn::ImportValue:
+              !Sub cloudmart-${Environment}-private-subnet-a
+
+        SecurityGroupIds:
+          - Fn::ImportValue:
+              !Sub cloudmart-${Environment}-sg-lambda
+
       Code:
+
         S3Bucket:
           Fn::ImportValue:
             !Sub cloudmart-${Environment}-lambda-artifacts-bucket
@@ -105,14 +155,16 @@ Resources:
       Environment:
         Variables:
 
-          AUTH_TOKEN_PARAM: !Sub /cloudmart/${Environment}/auth/token
+          AUTH_TOKEN_PARAM:
+            !Sub /cloudmart/${Environment}/auth/token
 
-          ENVIRONMENT: !Ref Environment
+          ENVIRONMENT:
+            !Ref Environment
 
 
-  # ============================================================
+  # ==============================================================
   # AUTHORIZE LAMBDA FUNCTION URL
-  # ============================================================
+  # ==============================================================
 
   AuthorizerFunctionUrl:
     Type: AWS::Lambda::Url
@@ -121,12 +173,13 @@ Resources:
       TargetFunctionArn:
         !GetAtt AuthorizerFunction.Arn
 
-      AuthType: NONE
+      AuthType:
+        NONE
 
 
-  # ============================================================
+  # ==============================================================
   # AUTHORIZE FUNCTION URL PERMISSION
-  # ============================================================
+  # ==============================================================
 
   AuthorizerFunctionUrlPermission:
     Type: AWS::Lambda::Permission
@@ -144,14 +197,16 @@ Resources:
         NONE
 
 
-  # ============================================================
+  # ==============================================================
   # PRODUCT LAMBDA ROLE
-  # ============================================================
+  # ==============================================================
 
   ProductLambdaRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub cloudmart-${Environment}-product-lambda-role
+
+      RoleName:
+        !Sub cloudmart-${Environment}-product-lambda-role
 
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
@@ -164,7 +219,12 @@ Resources:
             Action:
               - sts:AssumeRole
 
+      ManagedPolicyArns:
+
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+
       Policies:
+
 
         # --------------------------------------------------------
         # SSM
@@ -181,19 +241,24 @@ Resources:
 
                 Resource:
 
-                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudmart/${Environment}/database/password
+                  - !Sub >
+                    arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudmart/${Environment}/database/password
 
-                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudmart/${Environment}/database/host
+                  - !Sub >
+                    arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudmart/${Environment}/database/host
 
-                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudmart/${Environment}/database/name
+                  - !Sub >
+                    arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudmart/${Environment}/database/name
 
-                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudmart/${Environment}/database/username
+                  - !Sub >
+                    arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudmart/${Environment}/database/username
 
-                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudmart/${Environment}/inventory/low-stock-threshold
+                  - !Sub >
+                    arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudmart/${Environment}/inventory/low-stock-threshold
 
 
         # --------------------------------------------------------
-        # CloudWatch Logs
+        # CLOUDWATCH
         # --------------------------------------------------------
 
         - PolicyName: ProductLogging
@@ -206,13 +271,13 @@ Resources:
                   - logs:CreateLogGroup
                   - logs:CreateLogStream
                   - logs:PutLogEvents
-
                 Resource:
-                  - !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:*
+                  - !Sub >
+                    arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:*
 
 
         # --------------------------------------------------------
-        # EventBridge
+        # EVENTBRIDGE
         # --------------------------------------------------------
 
         - PolicyName: ProductEventBridge
@@ -225,7 +290,8 @@ Resources:
                   - events:PutEvents
 
                 Resource:
-                  - !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/cloudmart-${Environment}-bus
+                  - !Sub >
+                    arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/cloudmart-${Environment}-bus
 
 
         # --------------------------------------------------------
@@ -245,9 +311,9 @@ Resources:
                   - !Ref LowStockTopic
 
 
-  # ============================================================
+  # ==============================================================
   # PRODUCT LAMBDA
-  # ============================================================
+  # ==============================================================
 
   ProductLambda:
     Type: AWS::Lambda::Function
@@ -259,20 +325,28 @@ Resources:
       Runtime:
         python3.12
 
-      # IMPORTANT:
-      # src/product/handler.py
-      # contains def handler(event, context)
       Handler:
         handler.handler
 
       Role:
         !GetAtt ProductLambdaRole.Arn
 
-      Timeout:
-        30
+      Timeout: 30
 
-      MemorySize:
-        128
+      MemorySize: 128
+
+      # ----------------------------------------------------------
+      # PRIVATE SUBNET
+      # ----------------------------------------------------------
+
+      VpcConfig:
+        SubnetIds:
+          - Fn::ImportValue:
+              !Sub cloudmart-${Environment}-private-subnet-a
+
+        SecurityGroupIds:
+          - Fn::ImportValue:
+              !Sub cloudmart-${Environment}-sg-lambda
 
       Code:
 
@@ -290,16 +364,14 @@ Resources:
             !Ref Environment
 
           # ------------------------------------------------------
-          # Dedicated Authorizer Function URL
+          # DEDICATED AUTHORIZER FUNCTION URL
           # ------------------------------------------------------
 
           AUTHORIZER_URL:
             !GetAtt AuthorizerFunctionUrl.FunctionUrl
 
           # ------------------------------------------------------
-          # Database parameter names
-          #
-          # Values are retrieved at runtime.
+          # DATABASE
           # ------------------------------------------------------
 
           DB_HOST_PARAM:
@@ -315,14 +387,14 @@ Resources:
             !Sub /cloudmart/${Environment}/database/password
 
           # ------------------------------------------------------
-          # Inventory
+          # INVENTORY
           # ------------------------------------------------------
 
           LOW_STOCK_THRESHOLD_PARAM:
             !Sub /cloudmart/${Environment}/inventory/low-stock-threshold
 
           # ------------------------------------------------------
-          # EventBridge
+          # EVENTBRIDGE
           # ------------------------------------------------------
 
           EVENT_BUS_NAME:
@@ -336,9 +408,9 @@ Resources:
             !Ref LowStockTopic
 
 
-  # ============================================================
+  # ==============================================================
   # PRODUCT FUNCTION URL
-  # ============================================================
+  # ==============================================================
 
   ProductFunctionUrl:
     Type: AWS::Lambda::Url
@@ -351,9 +423,9 @@ Resources:
         NONE
 
 
-  # ============================================================
+  # ==============================================================
   # PRODUCT FUNCTION URL PERMISSION
-  # ============================================================
+  # ==============================================================
 
   ProductFunctionUrlPermission:
     Type: AWS::Lambda::Permission
@@ -371,9 +443,9 @@ Resources:
         NONE
 
 
-  # ============================================================
+  # ==============================================================
   # LOW STOCK SNS TOPIC
-  # ============================================================
+  # ==============================================================
 
   LowStockTopic:
     Type: AWS::SNS::Topic
@@ -383,9 +455,9 @@ Resources:
         !Sub cloudmart-${Environment}-low-stock
 
 
-  # ============================================================
+  # ==============================================================
   # LOW STOCK EMAIL SUBSCRIPTION
-  # ============================================================
+  # ==============================================================
 
   LowStockEmailSubscription:
     Type: AWS::SNS::Subscription
@@ -401,9 +473,9 @@ Resources:
         !Ref AlertEmail
 
 
-  # ============================================================
+  # ==============================================================
   # SCHEMA APPLY ROLE
-  # ============================================================
+  # ==============================================================
 
   SchemaApplyRole:
     Type: AWS::IAM::Role
@@ -423,7 +495,15 @@ Resources:
             Action:
               - sts:AssumeRole
 
+      ManagedPolicyArns:
+
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+
       Policies:
+
+        # --------------------------------------------------------
+        # SSM
+        # --------------------------------------------------------
 
         - PolicyName: SchemaApplySSMRead
           PolicyDocument:
@@ -436,14 +516,22 @@ Resources:
 
                 Resource:
 
-                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudmart/${Environment}/database/host
+                  - !Sub >
+                    arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudmart/${Environment}/database/host
 
-                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudmart/${Environment}/database/name
+                  - !Sub >
+                    arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudmart/${Environment}/database/name
 
-                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudmart/${Environment}/database/username
+                  - !Sub >
+                    arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudmart/${Environment}/database/username
 
-                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudmart/${Environment}/database/password
+                  - !Sub >
+                    arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudmart/${Environment}/database/password
 
+
+        # --------------------------------------------------------
+        # CLOUDWATCH
+        # --------------------------------------------------------
 
         - PolicyName: SchemaApplyLogging
           PolicyDocument:
@@ -457,12 +545,13 @@ Resources:
                   - logs:PutLogEvents
 
                 Resource:
-                  - !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:*
+                  - !Sub >
+                    arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:*
 
 
-  # ============================================================
+  # ==============================================================
   # SCHEMA APPLY LAMBDA
-  # ============================================================
+  # ==============================================================
 
   SchemaApplyFunction:
     Type: AWS::Lambda::Function
@@ -480,11 +569,22 @@ Resources:
       Role:
         !GetAtt SchemaApplyRole.Arn
 
-      Timeout:
-        120
+      Timeout: 120
 
-      MemorySize:
-        256
+      MemorySize: 256
+
+      # ----------------------------------------------------------
+      # PRIVATE SUBNET
+      # ----------------------------------------------------------
+
+      VpcConfig:
+        SubnetIds:
+          - Fn::ImportValue:
+              !Sub cloudmart-${Environment}-private-subnet-a
+
+        SecurityGroupIds:
+          - Fn::ImportValue:
+              !Sub cloudmart-${Environment}-sg-lambda
 
       Code:
 
@@ -520,25 +620,36 @@ Resources:
 
 Outputs:
 
+
   ProductFunctionUrl:
     Description: Product Lambda Function URL
     Value:
       !GetAtt ProductFunctionUrl.FunctionUrl
+
 
   ProductFunctionArn:
     Description: Product Lambda ARN
     Value:
       !GetAtt ProductLambda.Arn
 
+
   AuthorizerFunctionUrl:
     Description: Dedicated Authorizer Lambda Function URL
     Value:
       !GetAtt AuthorizerFunctionUrl.FunctionUrl
 
+
   AuthorizerFunctionArn:
     Description: Authorizer Lambda ARN
     Value:
       !GetAtt AuthorizerFunction.Arn
+
+
+  SchemaApplyFunctionArn:
+    Description: Schema Apply Lambda ARN
+    Value:
+      !GetAtt SchemaApplyFunction.Arn
+
 
   LowStockTopicArn:
     Description: Low stock SNS topic ARN
