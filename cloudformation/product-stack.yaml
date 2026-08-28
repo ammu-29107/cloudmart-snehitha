@@ -516,8 +516,7 @@ Resources:
                   - ssm:GetParameters
 
                 Resource:
-                  - !Sub >
-                    arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudmart/${Environment}/database/*
+                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudmart/${Environment}/database/*
 
 
         # --------------------------------------------------------
