@@ -1,20 +1,28 @@
 """
-Runs inside the VPC (unlike the GitHub Actions runner, which cannot reach
-RDS directly since it's in a private subnet). The pipeline invokes this
-Lambda via `aws lambda invoke` — a control-plane API call that works fine
-from a public runner — and this function does the actual DDL work over
-its VPC-local connection to RDS.
+Runs inside the VPC.
 
-Every statement uses IF NOT EXISTS / INSERT IGNORE so re-running this on
-every deploy is safe and produces no errors on a schema that already exists.
+The GitHub Actions runner invokes this Lambda through the AWS control
+plane. The Lambda itself runs inside the VPC and connects to the private
+RDS database.
+
+Database connection details are retrieved from AWS Systems Manager
+Parameter Store at runtime.
+
+The password is stored as a SecureString and retrieved with decryption.
+
+Every DDL statement uses IF NOT EXISTS and sample-data inserts use
+INSERT IGNORE, so this Lambda is safe to invoke repeatedly.
 """
 
 import os
 import json
+
 import boto3
 import pymysql
 
+
 ssm = boto3.client("ssm")
+
 
 DDL_STATEMENTS = [
     """
@@ -27,6 +35,7 @@ DDL_STATEMENTS = [
       status ENUM('ACTIVE','INACTIVE') NOT NULL DEFAULT 'ACTIVE'
     )
     """,
+
     """
     CREATE TABLE IF NOT EXISTS addresses (
       address_id INT AUTO_INCREMENT PRIMARY KEY,
@@ -41,6 +50,7 @@ DDL_STATEMENTS = [
       FOREIGN KEY (customer_id) REFERENCES customers(customer_id)
     )
     """,
+
     """
     CREATE TABLE IF NOT EXISTS categories (
       category_id INT AUTO_INCREMENT PRIMARY KEY,
@@ -49,6 +59,7 @@ DDL_STATEMENTS = [
       status ENUM('ACTIVE','INACTIVE') NOT NULL DEFAULT 'ACTIVE'
     )
     """,
+
     """
     CREATE TABLE IF NOT EXISTS products (
       product_id INT AUTO_INCREMENT PRIMARY KEY,
@@ -65,22 +76,31 @@ DDL_STATEMENTS = [
       INDEX idx_products_status (status)
     )
     """,
+
     """
     CREATE TABLE IF NOT EXISTS orders (
       order_id INT AUTO_INCREMENT PRIMARY KEY,
       customer_id INT NOT NULL,
       shipping_address_id INT NOT NULL,
       billing_address_id INT NOT NULL,
-      status ENUM('PENDING','PROCESSING','COMPLETED','CANCELLED','FAILED') NOT NULL,
+      status ENUM(
+        'PENDING',
+        'PROCESSING',
+        'COMPLETED',
+        'CANCELLED',
+        'FAILED'
+      ) NOT NULL,
       total_amount DECIMAL(10,2) NOT NULL,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        ON UPDATE CURRENT_TIMESTAMP,
       FOREIGN KEY (customer_id) REFERENCES customers(customer_id),
       FOREIGN KEY (shipping_address_id) REFERENCES addresses(address_id),
       FOREIGN KEY (billing_address_id) REFERENCES addresses(address_id),
       INDEX idx_orders_customer_status (customer_id, status)
     )
     """,
+
     """
     CREATE TABLE IF NOT EXISTS order_items (
       order_item_id INT AUTO_INCREMENT PRIMARY KEY,
@@ -95,30 +115,49 @@ DDL_STATEMENTS = [
       INDEX idx_order_items_order (order_id)
     )
     """,
+
     """
     CREATE TABLE IF NOT EXISTS order_status_history (
       history_id INT AUTO_INCREMENT PRIMARY KEY,
       order_id INT NOT NULL,
-      previous_status ENUM('PENDING','PROCESSING','COMPLETED','CANCELLED','FAILED'),
-      new_status ENUM('PENDING','PROCESSING','COMPLETED','CANCELLED','FAILED') NOT NULL,
+      previous_status ENUM(
+        'PENDING',
+        'PROCESSING',
+        'COMPLETED',
+        'CANCELLED',
+        'FAILED'
+      ),
+      new_status ENUM(
+        'PENDING',
+        'PROCESSING',
+        'COMPLETED',
+        'CANCELLED',
+        'FAILED'
+      ) NOT NULL,
       changed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (order_id) REFERENCES orders(order_id),
       INDEX idx_history_order (order_id)
     )
     """,
+
     """
     CREATE TABLE IF NOT EXISTS inventory_transactions (
       transaction_id INT AUTO_INCREMENT PRIMARY KEY,
       product_id INT NOT NULL,
       order_id INT NULL,
       change_quantity INT NOT NULL,
-      transaction_type ENUM('DEDUCTION','RESTOCK','CANCELLATION_RESTORE') NOT NULL,
+      transaction_type ENUM(
+        'DEDUCTION',
+        'RESTOCK',
+        'CANCELLATION_RESTORE'
+      ) NOT NULL,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (product_id) REFERENCES products(product_id),
       FOREIGN KEY (order_id) REFERENCES orders(order_id),
       INDEX idx_inventory_product (product_id)
     )
     """,
+
     """
     CREATE TABLE IF NOT EXISTS idempotency_keys (
       idempotency_key VARCHAR(64) PRIMARY KEY,
@@ -130,46 +169,171 @@ DDL_STATEMENTS = [
     """,
 ]
 
-# Milestone 3 explicitly requires sample data for the review demo.
+
+# Milestone 3 sample data for the review/demo.
 SAMPLE_DATA_STATEMENTS = [
     """
-    INSERT IGNORE INTO categories (category_id, category_name, description, status)
-    VALUES (1, 'Electronics', 'Electronic gadgets and accessories', 'ACTIVE')
+    INSERT IGNORE INTO categories (
+      category_id,
+      category_name,
+      description,
+      status
+    )
+    VALUES (
+      1,
+      'Electronics',
+      'Electronic gadgets and accessories',
+      'ACTIVE'
+    )
     """,
+
     """
-    INSERT IGNORE INTO products (product_id, category_id, product_name, description, price, stock_quantity, status)
+    INSERT IGNORE INTO products (
+      product_id,
+      category_id,
+      product_name,
+      description,
+      price,
+      stock_quantity,
+      status
+    )
     VALUES
-      (1, 1, 'Wireless Mouse', '2.4GHz wireless mouse', 799.00, 45, 'ACTIVE'),
-      (2, 1, 'USB-C Hub', '7-in-1 USB-C hub', 1299.00, 12, 'ACTIVE'),
-      (3, 1, 'Mechanical Keyboard', 'RGB mechanical keyboard', 3499.00, 8, 'ACTIVE')
-    """,
+      (
+        1,
+        1,
+        'Wireless Mouse',
+        '2.4GHz wireless mouse',
+        799.00,
+        45,
+        'ACTIVE'
+      ),
+      (
+        2,
+        1,
+        'USB-C Hub',
+        '7-in-1 USB-C hub',
+        1299.00,
+        12,
+        'ACTIVE'
+      ),
+      (
+        3,
+        1,
+        'Mechanical Keyboard',
+        'RGB mechanical keyboard',
+        3499.00,
+        8,
+        'ACTIVE'
+      )
+    """
 ]
 
 
-def lambda_handler(event, context):
-    password = ssm.get_parameter(
-        Name=os.environ["DB_PASSWORD_PARAM"], WithDecryption=True
-    )["Parameter"]["Value"]
+def get_ssm_parameter(name, with_decryption=False):
+    """
+    Retrieve a single value from SSM Parameter Store.
+    """
 
-    conn = pymysql.connect(
-        host=os.environ["DB_HOST"],
-        user=os.environ["DB_USER"],
-        password=password,
-        db=os.environ["DB_NAME"],
-        connect_timeout=10,
-        autocommit=True,
+    response = ssm.get_parameter(
+        Name=name,
+        WithDecryption=with_decryption
     )
 
+    return response["Parameter"]["Value"]
+
+
+def lambda_handler(event, context):
+
     applied = []
+    conn = None
+
     try:
+
+        # ========================================================
+        # READ DATABASE PARAMETERS FROM SSM
+        # ========================================================
+
+        host = get_ssm_parameter(
+            os.environ["DB_HOST_PARAM"]
+        )
+
+        db_name = get_ssm_parameter(
+            os.environ["DB_NAME_PARAM"]
+        )
+
+        user = get_ssm_parameter(
+            os.environ["DB_USER_PARAM"]
+        )
+
+        password = get_ssm_parameter(
+            os.environ["DB_PASSWORD_PARAM"],
+            with_decryption=True
+        )
+
+        # ========================================================
+        # CONNECT TO RDS
+        # ========================================================
+
+        conn = pymysql.connect(
+            host=host,
+            user=user,
+            password=password,
+            db=db_name,
+            connect_timeout=10,
+            autocommit=True
+        )
+
+        # ========================================================
+        # APPLY DATABASE SCHEMA
+        # ========================================================
+
         with conn.cursor() as cur:
+
             for stmt in DDL_STATEMENTS:
+
                 cur.execute(stmt)
-                applied.append(stmt.strip().split("\n")[0])
+
+                applied.append(
+                    stmt.strip().split("\n")[0]
+                )
+
+            # ====================================================
+            # INSERT SAMPLE DATA
+            # ====================================================
+
             for stmt in SAMPLE_DATA_STATEMENTS:
+
                 cur.execute(stmt)
-        return {"statusCode": 200, "body": json.dumps({"success": True, "tables_applied": len(DDL_STATEMENTS)})}
+
+        # ========================================================
+        # SUCCESS
+        # ========================================================
+
+        return {
+            "statusCode": 200,
+            "body": json.dumps({
+                "success": True,
+                "tables_applied": len(DDL_STATEMENTS),
+                "sample_data_applied": True
+            })
+        }
+
     except Exception as e:
-        return {"statusCode": 500, "body": json.dumps({"success": False, "error": str(e), "applied_so_far": applied})}
+
+        # ========================================================
+        # FAILURE
+        # ========================================================
+
+        return {
+            "statusCode": 500,
+            "body": json.dumps({
+                "success": False,
+                "error": str(e),
+                "applied_so_far": applied
+            })
+        }
+
     finally:
-        conn.close()
+
+        if conn is not None:
+            conn.close()
