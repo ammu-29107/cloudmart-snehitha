@@ -159,8 +159,7 @@ Resources:
             Fn::ImportValue: !Sub cloudmart-${Environment}-rds-endpoint
           DB_NAME: cloudmart
           DB_USER: cloudmart_admin
-          DB_PASSWORD:
-            Fn::Sub: '{{resolve:ssm-secure:/cloudmart/${Environment}/database/password}}'
+          DB_PASSWORD_PARAM: !Sub /cloudmart/${Environment}/database/password
           AUTH_TOKEN_PARAM: !Sub /cloudmart/${Environment}/auth/token
           LOW_STOCK_THRESHOLD_PARAM: !Sub /cloudmart/${Environment}/inventory/low-stock-threshold
           LOW_STOCK_TOPIC_ARN: !Ref LowStockTopic
