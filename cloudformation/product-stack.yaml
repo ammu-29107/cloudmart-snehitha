@@ -346,7 +346,7 @@ Resources:
         python3.12
 
       Handler:
-        handler.handler
+        handler.lambda_handler
 
       Role:
         !GetAtt ProductLambdaRole.Arn
