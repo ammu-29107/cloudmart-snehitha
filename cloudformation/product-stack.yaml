@@ -198,6 +198,26 @@ Resources:
 
 
   # ==============================================================
+  # AUTHORIZE FUNCTION URL INVOKE PERMISSION
+  # ==============================================================
+
+  AuthorizerFunctionInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+
+      FunctionName:
+        !Ref AuthorizerFunction
+
+      Action:
+        lambda:InvokeFunction
+
+      Principal: '*'
+
+      InvokedViaFunctionUrl:
+        true
+
+
+  # ==============================================================
   # PRODUCT LAMBDA ROLE
   # ==============================================================
 
