@@ -1,36 +1,38 @@
 AWSTemplateFormatVersion: '2010-09-09'
+
 Description: >
-  CloudMart product-stack — Product Lambda, Function URL, IAM role,
-  low-stock SNS topic. Also owns the schema-apply Lambda: it needs the
-  Lambda artifacts bucket from storage-stack, so it cannot live in
-  database-stack, which deploys before storage-stack in the fixed
-  deployment order. This stack is the first one after storage-stack,
-  so it is the correct place for it without changing stack order.
+  CloudMart product-stack — owns the Product Lambda, Function URL,
+  authentication support, IAM role, low-stock SNS topic, and the
+  schema-apply Lambda. No separate auth-stack is required.
 
 Parameters:
+
   Environment:
     Type: String
+
   LambdaCodeKey:
     Type: String
     Description: S3 key of the packaged Product Lambda zip
+
   SchemaApplyCodeKey:
     Type: String
     Description: S3 key of the packaged schema-apply Lambda zip
+
   AlertEmail:
     Type: String
     Description: Email address that receives low-stock SNS alerts
 
 Resources:
 
+  # ============================================================
+  # LOW-STOCK SNS
+  # ============================================================
+
   LowStockTopic:
     Type: AWS::SNS::Topic
     Properties:
       TopicName: !Sub cloudmart-${Environment}-low-stock
 
-  # SNS creates the subscription in PendingConfirmation state - AWS
-  # requires the recipient to click the confirmation link sent to their
-  # inbox at least once. CloudFormation cannot auto-confirm this; it's
-  # a deliberate SNS security feature, not something IaC can bypass.
   LowStockEmailSubscription:
     Type: AWS::SNS::Subscription
     Properties:
@@ -38,34 +40,66 @@ Resources:
       Protocol: email
       Endpoint: !Ref AlertEmail
 
+
   # ============================================================
-  # Schema-apply Lambda — runs inside the VPC to apply RDS DDL,
-  # since the GitHub Actions runner cannot reach RDS directly.
+  # AUTHENTICATION SUPPORT
+  #
+  # There is deliberately NO auth-stack.
+  #
+  # The authentication token itself is written as an SSM
+  # SecureString by deploy.yaml because CloudFormation's
+  # AWS::SSM::Parameter resource does not support SecureString.
+  #
+  # Product Lambda reads this parameter through IAM.
+  # src/shared/auth.py performs the actual Bearer-token validation.
   # ============================================================
+
+
+  # ============================================================
+  # SCHEMA-APPLY LAMBDA
+  # ============================================================
+
   SchemaApplyRole:
     Type: AWS::IAM::Role
     Properties:
       RoleName: !Sub cloudmart-${Environment}-schema-apply-role
+
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
           - Effect: Allow
-            Principal: {Service: lambda.amazonaws.com}
+            Principal:
+              Service: lambda.amazonaws.com
             Action: sts:AssumeRole
+
       Policies:
+
         - PolicyName: SchemaApplyPolicy
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
+
               - Effect: Allow
-                Action: [ssm:GetParameter]
-                Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudmart/${Environment}/database/*
+                Action:
+                  - ssm:GetParameter
+                Resource:
+                  - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudmart/${Environment}/database/*
+
               - Effect: Allow
-                Action: [logs:CreateLogGroup, logs:CreateLogStream, logs:PutLogEvents]
-                Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/cloudmart-${Environment}-schema-apply:*
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/cloudmart-${Environment}-schema-apply:*
+
               - Effect: Allow
-                Action: [ec2:CreateNetworkInterface, ec2:DescribeNetworkInterfaces, ec2:DeleteNetworkInterface]
+                Action:
+                  - ec2:CreateNetworkInterface
+                  - ec2:DescribeNetworkInterfaces
+                  - ec2:DeleteNetworkInterface
                 Resource: '*'
+
 
   SchemaApplyFunction:
     Type: AWS::Lambda::Function
@@ -75,63 +109,123 @@ Resources:
       Handler: handler.handler
       Role: !GetAtt SchemaApplyRole.Arn
       Timeout: 30
+
       Code:
         S3Bucket:
           Fn::ImportValue: !Sub cloudmart-${Environment}-lambda-artifacts-bucket
         S3Key: !Ref SchemaApplyCodeKey
+
       VpcConfig:
         SubnetIds:
           - Fn::ImportValue: !Sub cloudmart-${Environment}-private-subnet-a
+
         SecurityGroupIds:
           - Fn::ImportValue: !Sub cloudmart-${Environment}-sg-lambda
+
       Environment:
         Variables:
+
           DB_HOST:
             Fn::ImportValue: !Sub cloudmart-${Environment}-rds-endpoint
+
           DB_NAME: cloudmart
+
           DB_USER: cloudmart_admin
+
           DB_PASSWORD_PARAM: !Sub /cloudmart/${Environment}/database/password
 
+
   # ============================================================
-  # Product Lambda
+  # PRODUCT LAMBDA IAM ROLE
+  #
+  # This role contains:
+  # - database SSM access
+  # - authentication-token SSM access
+  # - low-stock threshold SSM access
+  # - SNS publishing
+  # - EventBridge publishing
+  # - CloudWatch logging
+  # - VPC networking
   # ============================================================
+
   ProductLambdaRole:
     Type: AWS::IAM::Role
     Properties:
       RoleName: !Sub cloudmart-${Environment}-product-lambda-role
+
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
           - Effect: Allow
-            Principal: {Service: lambda.amazonaws.com}
+            Principal:
+              Service: lambda.amazonaws.com
             Action: sts:AssumeRole
+
       Policies:
+
         - PolicyName: ProductLambdaPolicy
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
+
+              # ------------------------------------------------
+              # SSM
+              # ------------------------------------------------
+
               - Effect: Allow
-                Action: [ssm:GetParameter]
+                Action:
+                  - ssm:GetParameter
                 Resource:
                   - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudmart/${Environment}/database/*
                   - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudmart/${Environment}/auth/token
                   - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudmart/${Environment}/inventory/low-stock-threshold
+
+              # ------------------------------------------------
+              # SNS
+              # ------------------------------------------------
+
               - Effect: Allow
-                Action: [sns:Publish]
+                Action:
+                  - sns:Publish
                 Resource: !Ref LowStockTopic
+
+              # ------------------------------------------------
+              # EventBridge
+              # ------------------------------------------------
+
               - Effect: Allow
-                Action: [events:PutEvents]
+                Action:
+                  - events:PutEvents
                 Resource:
                   Fn::ImportValue: !Sub cloudmart-${Environment}-eventbus-arn
+
+              # ------------------------------------------------
+              # CloudWatch Logs
+              # ------------------------------------------------
+
               - Effect: Allow
-                Action: [logs:CreateLogGroup, logs:CreateLogStream, logs:PutLogEvents]
-                Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/cloudmart-${Environment}-product:*
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/cloudmart-${Environment}-product:*
+
+              # ------------------------------------------------
+              # VPC networking
+              # ------------------------------------------------
+
               - Effect: Allow
                 Action:
                   - ec2:CreateNetworkInterface
                   - ec2:DescribeNetworkInterfaces
                   - ec2:DeleteNetworkInterface
                 Resource: '*'
+
+
+  # ============================================================
+  # PRODUCT LAMBDA
+  # ============================================================
 
   ProductLambda:
     Type: AWS::Lambda::Function
@@ -141,35 +235,93 @@ Resources:
       Handler: handler.handler
       Role: !GetAtt ProductLambdaRole.Arn
       Timeout: 15
+
       Code:
         S3Bucket:
           Fn::ImportValue: !Sub cloudmart-${Environment}-lambda-artifacts-bucket
         S3Key: !Ref LambdaCodeKey
+
       VpcConfig:
         SubnetIds:
           - Fn::ImportValue: !Sub cloudmart-${Environment}-private-subnet-a
+
         SecurityGroupIds:
           - Fn::ImportValue: !Sub cloudmart-${Environment}-sg-lambda
+
       Environment:
         Variables:
-          ENVIRONMENT: !Ref Environment
+
+          ENVIRONMENT:
+            !Ref Environment
+
           DB_HOST:
             Fn::ImportValue: !Sub cloudmart-${Environment}-rds-endpoint
-          DB_NAME: cloudmart
-          AUTH_TOKEN_PARAM: !Sub /cloudmart/${Environment}/auth/token
-          LOW_STOCK_THRESHOLD_PARAM: !Sub /cloudmart/${Environment}/inventory/low-stock-threshold
-          LOW_STOCK_TOPIC_ARN: !Ref LowStockTopic
+
+          DB_NAME:
+            cloudmart
+
+          DB_USER:
+            cloudmart_admin
+
+          DB_PASSWORD_PARAM:
+            !Sub /cloudmart/${Environment}/database/password
+
+          # ----------------------------------------------------
+          # Authentication
+          # ----------------------------------------------------
+
+          AUTH_TOKEN_PARAM:
+            !Sub /cloudmart/${Environment}/auth/token
+
+          # ----------------------------------------------------
+          # Inventory
+          # ----------------------------------------------------
+
+          LOW_STOCK_THRESHOLD_PARAM:
+            !Sub /cloudmart/${Environment}/inventory/low-stock-threshold
+
+          # ----------------------------------------------------
+          # Notifications
+          # ----------------------------------------------------
+
+          LOW_STOCK_TOPIC_ARN:
+            !Ref LowStockTopic
+
+          # ----------------------------------------------------
+          # EventBridge
+          # ----------------------------------------------------
+
           EVENT_BUS_NAME:
             Fn::ImportValue: !Sub cloudmart-${Environment}-eventbus-name
+
+
+  # ============================================================
+  # PRODUCT FUNCTION URL
+  #
+  # AWS Function URL authentication is NONE because the
+  # application performs Bearer-token authentication itself.
+  # ============================================================
 
   ProductFunctionUrl:
     Type: AWS::Lambda::Url
     Properties:
       TargetFunctionArn: !Ref ProductLambda
       AuthType: NONE
+
       Cors:
-        AllowOrigins: ['*']
-        AllowMethods: [GET, POST, PUT, DELETE]
+        AllowOrigins:
+          - '*'
+
+        AllowMethods:
+          - GET
+          - POST
+          - PUT
+          - DELETE
+
+
+  # ============================================================
+  # FUNCTION URL INVOKE PERMISSION
+  # ============================================================
 
   ProductFunctionUrlPermission:
     Type: AWS::Lambda::Permission
@@ -179,10 +331,21 @@ Resources:
       Principal: '*'
       FunctionUrlAuthType: NONE
 
+
+# ==============================================================
+# OUTPUTS
+# ==============================================================
+
 Outputs:
+
   ProductFunctionUrl:
+    Description: Product Lambda Function URL
     Value: !GetAtt ProductFunctionUrl.FunctionUrl
-    Export: {Name: !Sub 'cloudmart-${Environment}-product-function-url'}
+    Export:
+      Name: !Sub cloudmart-${Environment}-product-function-url
+
   SchemaApplyFunctionName:
+    Description: Schema-apply Lambda function name
     Value: !Ref SchemaApplyFunction
-    Export: {Name: !Sub 'cloudmart-${Environment}-schema-apply-function'}
+    Export:
+      Name: !Sub cloudmart-${Environment}-schema-apply-function
