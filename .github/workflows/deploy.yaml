@@ -899,7 +899,7 @@ jobs:
           done
 
 
-    # ============================================================
+      # ============================================================
   # JOB 5
   # PRODUCT STACK
   # ============================================================
@@ -924,13 +924,25 @@ jobs:
 
     steps:
 
+      # ========================================================
+      # CHECKOUT
+      # ========================================================
+
       - uses: actions/checkout@v4
 
+
+      # ========================================================
+      # SETUP PYTHON
+      # ========================================================
 
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
+
+      # ========================================================
+      # AWS CREDENTIALS
+      # ========================================================
 
       - uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -943,6 +955,7 @@ jobs:
       # ========================================================
 
       - name: Write auth token SecureString
+
         run: |
 
           aws ssm put-parameter \
@@ -957,6 +970,7 @@ jobs:
       # ========================================================
 
       - name: Write low-stock threshold parameter
+
         run: |
 
           aws ssm put-parameter \
@@ -980,10 +994,10 @@ jobs:
             --query "Exports[?Name=='cloudmart-dev-lambda-artifacts-bucket'].Value" \
             --output text)
 
-          test -n "$BUCKET" || {
+          if [ -z "$BUCKET" ] || [ "$BUCKET" = "None" ]; then
             echo "ERROR: Lambda artifacts bucket export not found."
             exit 1
-          }
+          fi
 
           echo "Lambda artifact bucket: $BUCKET"
 
@@ -995,6 +1009,7 @@ jobs:
       # ========================================================
 
       - name: Prepare Lambda build directories
+
         run: |
 
           rm -rf build
@@ -1009,6 +1024,7 @@ jobs:
       # ========================================================
 
       - name: Package Product Lambda
+
         run: |
 
           test -f src/product/handler.py || {
@@ -1016,16 +1032,8 @@ jobs:
             exit 1
           }
 
-          test -d src/shared || {
-            echo "ERROR: src/shared directory not found."
-            exit 1
-          }
-
           cp src/product/handler.py \
             build/product/handler.py
-
-          cp -r src/shared \
-            build/product/shared
 
           pip install pymysql \
             -t build/product \
@@ -1039,14 +1047,20 @@ jobs:
 
           aws s3 cp \
             product.zip \
-            s3://${{ steps.bucket.outputs.name }}/dev/product/product-${{ github.sha }}.zip
+            "s3://${{ steps.bucket.outputs.name }}/dev/product/product-${{ github.sha }}.zip"
 
 
       # ========================================================
-      # PACKAGE AUTHORIZER
+      # PACKAGE AUTHORIZE LAMBDA
+      #
+      # IMPORTANT:
+      # This is a standalone Lambda.
+      # No src/shared is copied.
+      # No pymysql is required.
       # ========================================================
 
       - name: Package Authorizer Lambda
+
         run: |
 
           test -f src/authorizer/lambda_function.py || {
@@ -1065,7 +1079,7 @@ jobs:
 
           aws s3 cp \
             authorizer.zip \
-            s3://${{ steps.bucket.outputs.name }}/dev/authorizer/authorizer-${{ github.sha }}.zip
+            "s3://${{ steps.bucket.outputs.name }}/dev/authorizer/authorizer-${{ github.sha }}.zip"
 
 
       # ========================================================
@@ -1073,6 +1087,7 @@ jobs:
       # ========================================================
 
       - name: Package schema-apply Lambda
+
         run: |
 
           test -f src/schema-apply/handler.py || {
@@ -1095,7 +1110,7 @@ jobs:
 
           aws s3 cp \
             schema-apply.zip \
-            s3://${{ steps.bucket.outputs.name }}/dev/schema-apply/schema-apply-${{ github.sha }}.zip
+            "s3://${{ steps.bucket.outputs.name }}/dev/schema-apply/schema-apply-${{ github.sha }}.zip"
 
 
       # ========================================================
@@ -1173,6 +1188,7 @@ jobs:
       # ========================================================
 
       - name: Create product change set
+
         run: |
 
           test -s "$TEMPLATE_FILE" || {
@@ -1200,6 +1216,7 @@ jobs:
       # ========================================================
 
       - name: Wait for change set
+
         run: |
 
           for i in $(seq 1 20); do
@@ -1337,35 +1354,122 @@ jobs:
 
         run: |
 
+          echo "Invoking Schema Apply Lambda..."
+
           aws lambda invoke \
             --function-name cloudmart-dev-schema-apply \
             --payload '{}' \
             --cli-binary-format raw-in-base64-out \
             schema-response.json
 
+          echo "Raw Schema Apply response:"
+
           cat schema-response.json
 
+          echo
 
-          python3 -c "
+
+          python3 <<'PY'
 
           import json
+          import sys
 
-          response = json.load(
-              open('schema-response.json')
-          )
 
-          payload = json.loads(
-              response['body']
-          )
+          with open("schema-response.json") as f:
+              response = json.load(f)
 
-          assert payload['success'] is True, \
-              f'Schema apply failed: {payload}'
+
+          print("Lambda response:")
+          print(json.dumps(response, indent=2))
+
+
+          # ----------------------------------------------------
+          # Detect Lambda-level failure
+          # ----------------------------------------------------
+
+          if response.get("FunctionError"):
+
+              print(
+                  "ERROR: Schema Apply Lambda failed with FunctionError:"
+              )
+
+              print(response["FunctionError"])
+
+              sys.exit(1)
+
+
+          # ----------------------------------------------------
+          # Extract response body safely
+          # ----------------------------------------------------
+
+          if "body" not in response:
+
+              print(
+                  "ERROR: Schema Apply Lambda response does not "
+                  "contain a 'body' field."
+              )
+
+              sys.exit(1)
+
+
+          body = response["body"]
+
+
+          if isinstance(body, str):
+
+              try:
+                  payload = json.loads(body)
+
+              except json.JSONDecodeError:
+
+                  print("ERROR: Lambda body is not valid JSON.")
+
+                  print(body)
+
+                  sys.exit(1)
+
+          else:
+
+              payload = body
+
+
+          print("Schema Apply payload:")
+          print(json.dumps(payload, indent=2))
+
+
+          # ----------------------------------------------------
+          # Check HTTP status
+          # ----------------------------------------------------
+
+          status_code = response.get("statusCode")
+
+          if status_code != 200:
+
+              print(
+                  f"ERROR: Schema Apply returned statusCode "
+                  f"{status_code}"
+              )
+
+              sys.exit(1)
+
+
+          # ----------------------------------------------------
+          # Check application success
+          # ----------------------------------------------------
+
+          if payload.get("success") is not True:
+
+              print("ERROR: Schema Apply reported failure.")
+
+              sys.exit(1)
+
 
           print(
-              f\"Schema applied: {payload['tables_applied']} tables.\"
+              f"Schema applied successfully: "
+              f"{payload.get('tables_applied')} tables."
           )
 
-          "
+          PY
 
 
       # ========================================================
@@ -1383,10 +1487,13 @@ jobs:
             --query "Stacks[0].Outputs[?OutputKey=='ProductFunctionUrl'].OutputValue" \
             --output text)
 
-          test -n "$PRODUCT_URL" || {
+          if [ -z "$PRODUCT_URL" ] || [ "$PRODUCT_URL" = "None" ]; then
+
             echo "ERROR: Product Function URL was not returned."
+
             exit 1
-          }
+
+          fi
 
           echo "Product URL: $PRODUCT_URL"
 
@@ -1408,33 +1515,82 @@ jobs:
             --query "Stacks[0].Outputs[?OutputKey=='AuthorizerFunctionUrl'].OutputValue" \
             --output text)
 
-          test -n "$AUTHORIZER_URL" || {
-            echo "ERROR: Authorizer Function URL was not returned."
-            exit 1
-          }
+          if [ -z "$AUTHORIZER_URL" ] || [ "$AUTHORIZER_URL" = "None" ]; then
 
-          echo "Authorizer URL exists."
+            echo "ERROR: Authorizer Function URL was not returned."
+
+            exit 1
+
+          fi
+
+          echo "Authorizer URL: $AUTHORIZER_URL"
 
           echo "authorizer_url=$AUTHORIZER_URL" >> "$GITHUB_OUTPUT"
 
 
       # ========================================================
-      # AUTHORIZER TEST
+      # AUTHORIZE TEST
+      #
+      # 403 is treated as propagation delay.
+      # 401 is the expected application response.
       # ========================================================
 
       - name: Smoke test - Authorizer rejects missing token
 
         run: |
 
-          STATUS=$(curl \
-            -s \
-            -o /dev/null \
-            -w "%{http_code}" \
-            "${{ steps.authorizer.outputs.authorizer_url }}")
+          URL="${{ steps.authorizer.outputs.authorizer_url }}"
 
-          echo "Authorizer status: $STATUS"
+          echo "Testing Authorizer Function URL..."
+          echo "$URL"
 
-          test "$STATUS" -eq 401
+
+          for attempt in {1..10}; do
+
+            echo "Attempt $attempt/10"
+
+            STATUS=$(curl \
+              -s \
+              -o /tmp/authorizer-response.txt \
+              -w "%{http_code}" \
+              --max-time 15 \
+              "$URL")
+
+            echo "Authorizer HTTP status: $STATUS"
+
+
+            if [ "$STATUS" -eq 401 ]; then
+
+              echo "Authorizer correctly rejected missing token."
+
+              cat /tmp/authorizer-response.txt
+
+              exit 0
+
+            elif [ "$STATUS" -eq 403 ]; then
+
+              echo "Received 403. Function URL may still be propagating."
+
+              sleep 10
+
+              continue
+
+            else
+
+              echo "Unexpected Authorizer response."
+
+              cat /tmp/authorizer-response.txt || true
+
+              exit 1
+
+            fi
+
+          done
+
+
+          echo "ERROR: Authorizer Function URL did not become ready."
+
+          exit 1
 
 
       # ========================================================
@@ -1445,15 +1601,54 @@ jobs:
 
         run: |
 
-          STATUS=$(curl \
-            -s \
-            -o /dev/null \
-            -w "%{http_code}" \
-            "${{ steps.outputs.outputs.product_url }}products")
+          URL="${{ steps.outputs.outputs.product_url }}products"
 
-          echo "Product status without token: $STATUS"
+          echo "Testing Product without token..."
 
-          test "$STATUS" -eq 401
+          for attempt in {1..10}; do
+
+            echo "Attempt $attempt/10"
+
+            STATUS=$(curl \
+              -s \
+              -o /tmp/product-no-token-response.txt \
+              -w "%{http_code}" \
+              --max-time 15 \
+              "$URL")
+
+            echo "Product HTTP status: $STATUS"
+
+
+            if [ "$STATUS" -eq 401 ]; then
+
+              echo "Product correctly rejected missing token."
+
+              exit 0
+
+            elif [ "$STATUS" -eq 403 ]; then
+
+              echo "Received 403. Function URL may still be propagating."
+
+              sleep 10
+
+              continue
+
+            else
+
+              echo "Unexpected Product response."
+
+              cat /tmp/product-no-token-response.txt || true
+
+              exit 1
+
+            fi
+
+          done
+
+
+          echo "ERROR: Product Function URL did not become ready."
+
+          exit 1
 
 
       # ========================================================
@@ -1464,16 +1659,56 @@ jobs:
 
         run: |
 
-          STATUS=$(curl \
-            -s \
-            -o /dev/null \
-            -w "%{http_code}" \
-            -H "Authorization: Bearer wrong-token" \
-            "${{ steps.outputs.outputs.product_url }}products")
+          URL="${{ steps.outputs.outputs.product_url }}products"
 
-          echo "Product status with wrong token: $STATUS"
+          echo "Testing Product with wrong token..."
 
-          test "$STATUS" -eq 401
+
+          for attempt in {1..10}; do
+
+            echo "Attempt $attempt/10"
+
+            STATUS=$(curl \
+              -s \
+              -o /tmp/product-wrong-token-response.txt \
+              -w "%{http_code}" \
+              --max-time 15 \
+              -H "Authorization: Bearer wrong-token" \
+              "$URL")
+
+            echo "Product HTTP status: $STATUS"
+
+
+            if [ "$STATUS" -eq 401 ]; then
+
+              echo "Product correctly rejected wrong token."
+
+              exit 0
+
+            elif [ "$STATUS" -eq 403 ]; then
+
+              echo "Received 403. Function URL may still be propagating."
+
+              sleep 10
+
+              continue
+
+            else
+
+              echo "Unexpected Product response."
+
+              cat /tmp/product-wrong-token-response.txt || true
+
+              exit 1
+
+            fi
+
+          done
+
+
+          echo "ERROR: Product Function URL did not become ready."
+
+          exit 1
 
 
       # ========================================================
@@ -1484,16 +1719,58 @@ jobs:
 
         run: |
 
-          STATUS=$(curl \
-            -s \
-            -o /dev/null \
-            -w "%{http_code}" \
-            -H "Authorization: Bearer ${{ secrets.CLOUDMART_API_TOKEN }}" \
-            "${{ steps.outputs.outputs.product_url }}products")
+          URL="${{ steps.outputs.outputs.product_url }}products"
 
-          echo "Product status with correct token: $STATUS"
+          echo "Testing Product with correct token..."
 
-          test "$STATUS" -eq 200
+
+          for attempt in {1..10}; do
+
+            echo "Attempt $attempt/10"
+
+            STATUS=$(curl \
+              -s \
+              -o /tmp/product-correct-token-response.txt \
+              -w "%{http_code}" \
+              --max-time 15 \
+              -H "Authorization: Bearer ${{ secrets.CLOUDMART_API_TOKEN }}" \
+              "$URL")
+
+            echo "Product HTTP status: $STATUS"
+
+
+            if [ "$STATUS" -eq 200 ]; then
+
+              echo "Product Function URL is healthy."
+
+              cat /tmp/product-correct-token-response.txt
+
+              exit 0
+
+            elif [ "$STATUS" -eq 403 ]; then
+
+              echo "Received 403. Function URL may still be propagating."
+
+              sleep 10
+
+              continue
+
+            else
+
+              echo "Unexpected Product response."
+
+              cat /tmp/product-correct-token-response.txt || true
+
+              exit 1
+
+            fi
+
+          done
+
+
+          echo "ERROR: Product Function URL did not become ready."
+
+          exit 1
 
 
   # ============================================================
