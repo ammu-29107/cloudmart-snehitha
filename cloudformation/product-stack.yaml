@@ -502,21 +502,23 @@ Resources:
       Policies:
 
         # --------------------------------------------------------
-        # SSM
+        # SSM DATABASE PARAMETERS
         # --------------------------------------------------------
 
         - PolicyName: SchemaApplySSMRead
           PolicyDocument:
-          Version: '2012-10-17'
-          Statement:
+            Version: '2012-10-17'
+            Statement:
 
-            - Effect: Allow
-              Action:
-                - ssm:GetParameter
-                - ssm:GetParameters
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                  - ssm:GetParameters
 
-              Resource:
-                - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudmart/${Environment}/database/*
+                Resource:
+                  - !Sub >
+                    arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudmart/${Environment}/database/*
+
 
         # --------------------------------------------------------
         # CLOUDWATCH
@@ -608,7 +610,6 @@ Resources:
 # ================================================================
 
 Outputs:
-
 
   ProductFunctionUrl:
     Description: Product Lambda Function URL
