@@ -1,42 +1,30 @@
-"""
-CloudMart Schema Apply Lambda
-
-This Lambda runs inside the VPC so it can connect to the private RDS
-database.
-
-GitHub Actions invokes this Lambda using the AWS Lambda control-plane
-API. The GitHub runner does not need direct network access to RDS.
-
-Database connection details are stored in AWS Systems Manager
-Parameter Store.
-
-The schema is idempotent:
-- CREATE TABLE IF NOT EXISTS
-- INSERT IGNORE
-
-Therefore, this Lambda can safely be executed on every deployment.
-"""
-
 import json
 import logging
 import os
+import uuid
+import datetime
 
 import boto3
 import pymysql
+
+from shared.auth import authorize
 
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
+
+eventbridge = boto3.client("events")
+sns = boto3.client("sns")
 ssm = boto3.client("ssm")
 
 
-# ============================================================
-# SSM HELPER
-# ============================================================
+def log_json(**kwargs):
+    """Structured JSON logging."""
+    logger.info(json.dumps(kwargs))
+
 
 def get_ssm_parameter(name, decrypt=False):
-
     response = ssm.get_parameter(
         Name=name,
         WithDecryption=decrypt
@@ -44,10 +32,6 @@ def get_ssm_parameter(name, decrypt=False):
 
     return response["Parameter"]["Value"]
 
-
-# ============================================================
-# DATABASE CONNECTION
-# ============================================================
 
 def get_db_connection():
 
@@ -73,392 +57,702 @@ def get_db_connection():
         user=username,
         password=password,
         database=database,
+        cursorclass=pymysql.cursors.DictCursor,
         connect_timeout=10,
-        read_timeout=30,
-        write_timeout=30,
-        autocommit=False
     )
 
 
-# ============================================================
-# DATABASE SCHEMA
-# ============================================================
+def respond(status, body, request_id):
 
-DDL_STATEMENTS = [
+    return {
+        "statusCode": status,
+        "headers": {
+            "Content-Type": "application/json"
+        },
+        "body": json.dumps(
+            {
+                **body,
+                "request_id": request_id
+            },
+            default=str
+        )
+    }
 
-    """
-    CREATE TABLE IF NOT EXISTS customers (
-      customer_id INT AUTO_INCREMENT PRIMARY KEY,
-      first_name VARCHAR(100) NOT NULL,
-      last_name VARCHAR(100) NOT NULL,
-      email VARCHAR(255) NOT NULL UNIQUE,
-      phone VARCHAR(20),
-      status ENUM('ACTIVE','INACTIVE')
-        NOT NULL DEFAULT 'ACTIVE'
-    )
-    """,
-
-    """
-    CREATE TABLE IF NOT EXISTS addresses (
-      address_id INT AUTO_INCREMENT PRIMARY KEY,
-      customer_id INT NOT NULL,
-      address_line1 VARCHAR(255) NOT NULL,
-      address_line2 VARCHAR(255),
-      city VARCHAR(100) NOT NULL,
-      state VARCHAR(100) NOT NULL,
-      postal_code VARCHAR(20) NOT NULL,
-      country VARCHAR(100) NOT NULL,
-      is_default BOOLEAN NOT NULL DEFAULT FALSE,
-
-      FOREIGN KEY (customer_id)
-        REFERENCES customers(customer_id)
-    )
-    """,
-
-    """
-    CREATE TABLE IF NOT EXISTS categories (
-      category_id INT AUTO_INCREMENT PRIMARY KEY,
-      category_name VARCHAR(100) NOT NULL UNIQUE,
-      description VARCHAR(500),
-      status ENUM('ACTIVE','INACTIVE')
-        NOT NULL DEFAULT 'ACTIVE'
-    )
-    """,
-
-    """
-    CREATE TABLE IF NOT EXISTS products (
-      product_id INT AUTO_INCREMENT PRIMARY KEY,
-      category_id INT NOT NULL,
-      product_name VARCHAR(200) NOT NULL,
-      description TEXT,
-      price DECIMAL(10,2) NOT NULL,
-      stock_quantity INT NOT NULL DEFAULT 0,
-      status ENUM('ACTIVE','INACTIVE')
-        NOT NULL DEFAULT 'ACTIVE',
-
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-
-      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        ON UPDATE CURRENT_TIMESTAMP,
-
-      FOREIGN KEY (category_id)
-        REFERENCES categories(category_id),
-
-      INDEX idx_products_category (category_id),
-      INDEX idx_products_status (status)
-    )
-    """,
-
-    """
-    CREATE TABLE IF NOT EXISTS orders (
-      order_id INT AUTO_INCREMENT PRIMARY KEY,
-      customer_id INT NOT NULL,
-      shipping_address_id INT NOT NULL,
-      billing_address_id INT NOT NULL,
-
-      status ENUM(
-        'PENDING',
-        'PROCESSING',
-        'COMPLETED',
-        'CANCELLED',
-        'FAILED'
-      ) NOT NULL,
-
-      total_amount DECIMAL(10,2) NOT NULL,
-
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-
-      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        ON UPDATE CURRENT_TIMESTAMP,
-
-      FOREIGN KEY (customer_id)
-        REFERENCES customers(customer_id),
-
-      FOREIGN KEY (shipping_address_id)
-        REFERENCES addresses(address_id),
-
-      FOREIGN KEY (billing_address_id)
-        REFERENCES addresses(address_id),
-
-      INDEX idx_orders_customer_status
-        (customer_id, status)
-    )
-    """,
-
-    """
-    CREATE TABLE IF NOT EXISTS order_items (
-      order_item_id INT AUTO_INCREMENT PRIMARY KEY,
-      order_id INT NOT NULL,
-      product_id INT NOT NULL,
-      quantity INT NOT NULL,
-      unit_price DECIMAL(10,2) NOT NULL,
-      subtotal DECIMAL(10,2) NOT NULL,
-
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-
-      FOREIGN KEY (order_id)
-        REFERENCES orders(order_id),
-
-      FOREIGN KEY (product_id)
-        REFERENCES products(product_id),
-
-      INDEX idx_order_items_order (order_id)
-    )
-    """,
-
-    """
-    CREATE TABLE IF NOT EXISTS order_status_history (
-      history_id INT AUTO_INCREMENT PRIMARY KEY,
-      order_id INT NOT NULL,
-
-      previous_status ENUM(
-        'PENDING',
-        'PROCESSING',
-        'COMPLETED',
-        'CANCELLED',
-        'FAILED'
-      ),
-
-      new_status ENUM(
-        'PENDING',
-        'PROCESSING',
-        'COMPLETED',
-        'CANCELLED',
-        'FAILED'
-      ) NOT NULL,
-
-      changed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-
-      FOREIGN KEY (order_id)
-        REFERENCES orders(order_id),
-
-      INDEX idx_history_order (order_id)
-    )
-    """,
-
-    """
-    CREATE TABLE IF NOT EXISTS inventory_transactions (
-      transaction_id INT AUTO_INCREMENT PRIMARY KEY,
-      product_id INT NOT NULL,
-      order_id INT NULL,
-      change_quantity INT NOT NULL,
-
-      transaction_type ENUM(
-        'DEDUCTION',
-        'RESTOCK',
-        'CANCELLATION_RESTORE'
-      ) NOT NULL,
-
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-
-      FOREIGN KEY (product_id)
-        REFERENCES products(product_id),
-
-      FOREIGN KEY (order_id)
-        REFERENCES orders(order_id),
-
-      INDEX idx_inventory_product (product_id)
-    )
-    """,
-
-    """
-    CREATE TABLE IF NOT EXISTS idempotency_keys (
-      idempotency_key VARCHAR(64) PRIMARY KEY,
-      order_id INT NOT NULL,
-
-      status ENUM(
-        'IN_PROGRESS',
-        'COMPLETED'
-      ) NOT NULL,
-
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-
-      FOREIGN KEY (order_id)
-        REFERENCES orders(order_id)
-    )
-    """
-]
-
-
-# ============================================================
-# SAMPLE DATA
-# ============================================================
-
-SAMPLE_DATA_STATEMENTS = [
-
-    """
-    INSERT IGNORE INTO categories
-      (
-        category_id,
-        category_name,
-        description,
-        status
-      )
-    VALUES
-      (
-        1,
-        'Electronics',
-        'Electronic gadgets and accessories',
-        'ACTIVE'
-      )
-    """,
-
-    """
-    INSERT IGNORE INTO products
-      (
-        product_id,
-        category_id,
-        product_name,
-        description,
-        price,
-        stock_quantity,
-        status
-      )
-    VALUES
-      (
-        1,
-        1,
-        'Wireless Mouse',
-        '2.4GHz wireless mouse',
-        799.00,
-        45,
-        'ACTIVE'
-      ),
-      (
-        2,
-        1,
-        'USB-C Hub',
-        '7-in-1 USB-C hub',
-        1299.00,
-        12,
-        'ACTIVE'
-      ),
-      (
-        3,
-        1,
-        'Mechanical Keyboard',
-        'RGB mechanical keyboard',
-        3499.00,
-        8,
-        'ACTIVE'
-      )
-    """
-]
-
-
-# ============================================================
-# LAMBDA HANDLER
-# ============================================================
 
 def handler(event, context):
 
-    request_id = context.aws_request_id
+    request_id = str(uuid.uuid4())[:8]
 
-    logger.info(
-        json.dumps(
-            {
-                "request_id": request_id,
-                "event": "schema_apply_started"
-            }
-        )
+    request_context = event.get("requestContext") or {}
+
+    http_context = request_context.get("http") or {}
+
+    method = (
+        http_context.get("method")
+        or event.get("httpMethod")
     )
 
-    conn = None
-    applied = []
+    path = (
+        event.get("rawPath")
+        or event.get("path")
+        or ""
+    )
+
+    log_json(
+        request_id=request_id,
+        event="request_received",
+        method=method,
+        path=path
+    )
+
+    # ============================================================
+    # AUTHENTICATION
+    #
+    # Product Lambda delegates token validation to the
+    # dedicated Authorizer Lambda Function URL.
+    # ============================================================
+
+    if not authorize(event):
+
+        log_json(
+            request_id=request_id,
+            event="auth_failed"
+        )
+
+        return respond(
+            401,
+            {
+                "success": False,
+                "error": {
+                    "code": "UNAUTHORIZED",
+                    "message": "Missing or invalid token"
+                }
+            },
+            request_id
+        )
+
+    # ============================================================
+    # BUSINESS ROUTING
+    # ============================================================
 
     try:
 
-        conn = get_db_connection()
-
-        with conn.cursor() as cur:
-
-            # ------------------------------------------------
-            # CREATE TABLES
-            # ------------------------------------------------
-
-            for index, statement in enumerate(
-                DDL_STATEMENTS,
-                start=1
-            ):
-
-                cur.execute(statement)
-
-                applied.append(
-                    f"DDL_{index}"
-                )
-
-            # ------------------------------------------------
-            # INSERT SAMPLE DATA
-            # ------------------------------------------------
-
-            for statement in SAMPLE_DATA_STATEMENTS:
-
-                cur.execute(statement)
-
-        conn.commit()
-
-        logger.info(
-            json.dumps(
-                {
-                    "request_id": request_id,
-                    "event": "schema_apply_completed",
-                    "tables_applied": len(
-                        DDL_STATEMENTS
-                    )
-                }
+        if method == "POST" and path == "/products":
+            return create_product(
+                event,
+                request_id
             )
+
+        if method == "GET" and path.startswith("/products/"):
+            return get_product(
+                event,
+                request_id
+            )
+
+        if method == "GET" and path == "/products":
+            return list_products(
+                event,
+                request_id
+            )
+
+        if method == "PUT" and path.startswith("/products/"):
+            return update_product(
+                event,
+                request_id
+            )
+
+        if method == "DELETE" and path.startswith("/products/"):
+            return deactivate_product(
+                event,
+                request_id
+            )
+
+        return respond(
+            404,
+            {
+                "success": False,
+                "error": {
+                    "code": "NOT_FOUND",
+                    "message": "No matching route"
+                }
+            },
+            request_id
         )
-
-        return {
-            "statusCode": 200,
-            "body": json.dumps(
-                {
-                    "success": True,
-                    "tables_applied": len(
-                        DDL_STATEMENTS
-                    ),
-                    "sample_data_applied": True,
-                    "request_id": request_id
-                }
-            )
-        }
 
     except Exception as exc:
 
-        if conn:
-
-            try:
-                conn.rollback()
-            except Exception:
-                pass
-
-        logger.error(
-            json.dumps(
-                {
-                    "request_id": request_id,
-                    "event": "schema_apply_failed",
-                    "error_type": type(exc).__name__,
-                    "error": str(exc),
-                    "applied_so_far": applied
-                }
-            )
+        log_json(
+            request_id=request_id,
+            event="unhandled_error",
+            error=str(exc),
+            error_type=type(exc).__name__
         )
 
-        return {
-            "statusCode": 500,
-            "body": json.dumps(
-                {
-                    "success": False,
-                    "error": str(exc),
-                    "error_type": type(exc).__name__,
-                    "applied_so_far": applied,
-                    "request_id": request_id
+        return respond(
+            500,
+            {
+                "success": False,
+                "error": {
+                    "code": "INTERNAL_ERROR",
+                    "message": "Unexpected error"
                 }
+            },
+            request_id
+        )
+
+
+def get_low_stock_threshold():
+
+    return int(
+        get_ssm_parameter(
+            os.environ["LOW_STOCK_THRESHOLD_PARAM"]
+        )
+    )
+
+
+def publish_low_stock_alert(
+    product_id,
+    stock_quantity,
+    request_id
+):
+
+    sns.publish(
+        TopicArn=os.environ["LOW_STOCK_TOPIC_ARN"],
+        Subject="CloudMart low stock alert",
+        Message=(
+            f"Product {product_id} has only "
+            f"{stock_quantity} unit(s) left."
+        ),
+    )
+
+    eventbridge.put_events(
+        Entries=[
+            {
+                "Source": "cloudmart.product",
+                "DetailType": "LowStockEvents",
+                "EventBusName": os.environ["EVENT_BUS_NAME"],
+                "Detail": json.dumps(
+                    {
+                        "event_id": request_id,
+                        "event_type": "LowStockEvents",
+                        "source": "cloudmart.product",
+                        "event_time": (
+                            datetime.datetime.utcnow().isoformat()
+                            + "Z"
+                        ),
+                        "environment": os.environ["ENVIRONMENT"],
+                        "detail": {
+                            "product_id": product_id,
+                            "stock_quantity": stock_quantity
+                        }
+                    }
+                ),
+            }
+        ]
+    )
+
+    log_json(
+        request_id=request_id,
+        event="low_stock_alert_published",
+        product_id=product_id,
+        stock_quantity=stock_quantity
+    )
+
+
+def create_product(event, request_id):
+
+    body = json.loads(
+        event.get("body") or "{}"
+    )
+
+    required = [
+        "product_name",
+        "category_id",
+        "price",
+        "stock_quantity"
+    ]
+
+    missing = [
+        field
+        for field in required
+        if field not in body
+    ]
+
+    if missing:
+
+        return respond(
+            400,
+            {
+                "success": False,
+                "error": {
+                    "code": "MISSING_FIELDS",
+                    "message": f"Missing: {missing}"
+                }
+            },
+            request_id
+        )
+
+    conn = get_db_connection()
+
+    try:
+
+        with conn.cursor() as cur:
+
+            cur.execute(
+                """
+                SELECT category_id
+                FROM categories
+                WHERE category_id=%s
+                AND status='ACTIVE'
+                """,
+                (body["category_id"],)
             )
-        }
+
+            if not cur.fetchone():
+
+                return respond(
+                    400,
+                    {
+                        "success": False,
+                        "error": {
+                            "code": "INVALID_CATEGORY",
+                            "message": (
+                                f"category_id "
+                                f"{body['category_id']} "
+                                f"does not exist"
+                            )
+                        }
+                    },
+                    request_id
+                )
+
+            cur.execute(
+                """
+                INSERT INTO products
+                (
+                    category_id,
+                    product_name,
+                    description,
+                    price,
+                    stock_quantity,
+                    status
+                )
+                VALUES (%s,%s,%s,%s,%s,%s)
+                """,
+                (
+                    body["category_id"],
+                    body["product_name"],
+                    body.get("description"),
+                    body["price"],
+                    body["stock_quantity"],
+                    body.get("status", "ACTIVE")
+                ),
+            )
+
+            conn.commit()
+
+            product_id = cur.lastrowid
 
     finally:
+        conn.close()
 
-        if conn:
+    log_json(
+        request_id=request_id,
+        event="product_created",
+        product_id=product_id
+    )
 
-            conn.close()
+    if (
+        body["stock_quantity"]
+        <= get_low_stock_threshold()
+    ):
+
+        publish_low_stock_alert(
+            product_id,
+            body["stock_quantity"],
+            request_id
+        )
+
+    return respond(
+        201,
+        {
+            "success": True,
+            "data": {
+                "product_id": product_id,
+                **body
+            }
+        },
+        request_id
+    )
+
+
+def get_product(event, request_id):
+
+    path_parameters = (
+        event.get("pathParameters")
+        or {}
+    )
+
+    product_id = path_parameters.get(
+        "productId"
+    )
+
+    if not product_id:
+
+        path = (
+            event.get("rawPath")
+            or ""
+        )
+
+        product_id = path.rstrip("/").split("/")[-1]
+
+    conn = get_db_connection()
+
+    try:
+
+        with conn.cursor() as cur:
+
+            cur.execute(
+                """
+                SELECT *
+                FROM products
+                WHERE product_id=%s
+                """,
+                (product_id,)
+            )
+
+            product = cur.fetchone()
+
+    finally:
+        conn.close()
+
+    if not product:
+
+        return respond(
+            404,
+            {
+                "success": False,
+                "error": {
+                    "code": "PRODUCT_NOT_FOUND",
+                    "message": (
+                        f"product_id "
+                        f"{product_id} "
+                        f"does not exist"
+                    )
+                }
+            },
+            request_id
+        )
+
+    return respond(
+        200,
+        {
+            "success": True,
+            "data": product
+        },
+        request_id
+    )
+
+
+def list_products(event, request_id):
+
+    query_parameters = (
+        event.get("queryStringParameters")
+        or {}
+    )
+
+    category_id = query_parameters.get(
+        "category_id"
+    )
+
+    status = query_parameters.get(
+        "status",
+        "ACTIVE"
+    )
+
+    query = """
+        SELECT *
+        FROM products
+        WHERE status=%s
+    """
+
+    params = [status]
+
+    if category_id:
+
+        query += " AND category_id=%s"
+
+        params.append(category_id)
+
+    conn = get_db_connection()
+
+    try:
+
+        with conn.cursor() as cur:
+
+            cur.execute(
+                query,
+                params
+            )
+
+            products = cur.fetchall()
+
+    finally:
+        conn.close()
+
+    return respond(
+        200,
+        {
+            "success": True,
+            "data": products
+        },
+        request_id
+    )
+
+
+def update_product(event, request_id):
+
+    path_parameters = (
+        event.get("pathParameters")
+        or {}
+    )
+
+    product_id = path_parameters.get(
+        "productId"
+    )
+
+    if not product_id:
+
+        path = (
+            event.get("rawPath")
+            or ""
+        )
+
+        product_id = path.rstrip("/").split("/")[-1]
+
+    body = json.loads(
+        event.get("body") or "{}"
+    )
+
+    conn = get_db_connection()
+
+    try:
+
+        with conn.cursor() as cur:
+
+            cur.execute(
+                """
+                SELECT *
+                FROM products
+                WHERE product_id=%s
+                """,
+                (product_id,)
+            )
+
+            existing = cur.fetchone()
+
+            if not existing:
+
+                return respond(
+                    404,
+                    {
+                        "success": False,
+                        "error": {
+                            "code": "PRODUCT_NOT_FOUND",
+                            "message": (
+                                f"product_id "
+                                f"{product_id} "
+                                f"does not exist"
+                            )
+                        }
+                    },
+                    request_id
+                )
+
+            new_stock = body.get(
+                "stock_quantity",
+                existing["stock_quantity"]
+            )
+
+            new_status = existing["status"]
+
+            # Zero-stock business rule
+            if new_stock == 0:
+                new_status = "INACTIVE"
+
+            cur.execute(
+                """
+                UPDATE products
+                SET
+                    product_name=%s,
+                    description=%s,
+                    category_id=%s,
+                    price=%s,
+                    stock_quantity=%s,
+                    status=%s,
+                    updated_at=NOW()
+                WHERE product_id=%s
+                """,
+                (
+                    body.get(
+                        "product_name",
+                        existing["product_name"]
+                    ),
+                    body.get(
+                        "description",
+                        existing["description"]
+                    ),
+                    body.get(
+                        "category_id",
+                        existing["category_id"]
+                    ),
+                    body.get(
+                        "price",
+                        existing["price"]
+                    ),
+                    new_stock,
+                    body.get(
+                        "status",
+                        new_status
+                    ),
+                    product_id
+                ),
+            )
+
+            conn.commit()
+
+    finally:
+        conn.close()
+
+    log_json(
+        request_id=request_id,
+        event="product_updated",
+        product_id=product_id,
+        new_stock=new_stock
+    )
+
+    if (
+        new_stock
+        <= get_low_stock_threshold()
+    ):
+
+        publish_low_stock_alert(
+            product_id,
+            new_stock,
+            request_id
+        )
+
+    return respond(
+        200,
+        {
+            "success": True,
+            "data": {
+                "product_id": product_id,
+                "stock_quantity": new_stock,
+                "status": new_status
+            }
+        },
+        request_id
+    )
+
+
+def deactivate_product(event, request_id):
+
+    path_parameters = (
+        event.get("pathParameters")
+        or {}
+    )
+
+    product_id = path_parameters.get(
+        "productId"
+    )
+
+    if not product_id:
+
+        path = (
+            event.get("rawPath")
+            or ""
+        )
+
+        product_id = path.rstrip("/").split("/")[-1]
+
+    conn = get_db_connection()
+
+    try:
+
+        with conn.cursor() as cur:
+
+            cur.execute(
+                """
+                SELECT status
+                FROM products
+                WHERE product_id=%s
+                """,
+                (product_id,)
+            )
+
+            existing = cur.fetchone()
+
+            if not existing:
+
+                return respond(
+                    404,
+                    {
+                        "success": False,
+                        "error": {
+                            "code": "PRODUCT_NOT_FOUND",
+                            "message": (
+                                f"product_id "
+                                f"{product_id} "
+                                f"does not exist"
+                            )
+                        }
+                    },
+                    request_id
+                )
+
+            if existing["status"] == "INACTIVE":
+
+                return respond(
+                    409,
+                    {
+                        "success": False,
+                        "error": {
+                            "code": "PRODUCT_ALREADY_INACTIVE",
+                            "message": (
+                                f"product_id "
+                                f"{product_id} "
+                                f"is already INACTIVE"
+                            )
+                        }
+                    },
+                    request_id
+                )
+
+            cur.execute(
+                """
+                UPDATE products
+                SET
+                    status='INACTIVE',
+                    updated_at=NOW()
+                WHERE product_id=%s
+                """,
+                (product_id,)
+            )
+
+            conn.commit()
+
+    finally:
+        conn.close()
+
+    log_json(
+        request_id=request_id,
+        event="product_deactivated",
+        product_id=product_id
+    )
+
+    return {
+        "statusCode": 204,
+        "headers": {},
+        "body": ""
+    }
