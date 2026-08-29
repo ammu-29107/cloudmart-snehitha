@@ -7,8 +7,6 @@ import datetime
 import boto3
 import pymysql
 
-from shared.auth import authorize
-
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -104,32 +102,6 @@ def handler(event, context):
         method=method,
         path=path
     )
-
-    # ============================================================
-    # AUTHENTICATION
-    #
-    # Product Lambda delegates token validation to the
-    # dedicated Authorizer Lambda Function URL.
-    # ============================================================
-
-    if not authorize(event):
-
-        log_json(
-            request_id=request_id,
-            event="auth_failed"
-        )
-
-        return respond(
-            401,
-            {
-                "success": False,
-                "error": {
-                    "code": "UNAUTHORIZED",
-                    "message": "Missing or invalid token"
-                }
-            },
-            request_id
-        )
 
     # ============================================================
     # BUSINESS ROUTING
