@@ -465,6 +465,26 @@ Resources:
 
 
   # ==============================================================
+  # PRODUCT FUNCTION URL INVOKE PERMISSION
+  # ==============================================================
+
+  ProductFunctionUrlInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+
+      FunctionName:
+        !Ref ProductLambda
+
+      Action:
+        lambda:InvokeFunction
+
+      Principal: '*'
+
+      InvokedViaFunctionUrl:
+        true
+
+
+  # ==============================================================
   # AUTHORIZE INTERNAL INVOCATION OF PRODUCT LAMBDA
   # ==============================================================
 
