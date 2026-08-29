@@ -372,12 +372,6 @@ Resources:
           ENVIRONMENT:
             !Ref Environment
 
-          # ------------------------------------------------------
-          # DEDICATED AUTHORIZER FUNCTION URL
-          # ------------------------------------------------------
-
-          AUTHORIZER_URL:
-            !GetAtt AuthorizerFunctionUrl.FunctionUrl
 
           # ------------------------------------------------------
           # DATABASE
