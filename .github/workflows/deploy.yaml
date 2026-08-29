@@ -1032,8 +1032,18 @@ jobs:
             exit 1
           }
 
+          test -f src/shared/auth.py || {
+            echo "ERROR: src/shared/auth.py not found."
+            exit 1
+          }
+
           cp src/product/handler.py \
             build/product/handler.py
+
+          mkdir -p build/product/shared
+
+          cp src/shared/auth.py \
+            build/product/shared/auth.py
 
           pip install pymysql \
             -t build/product \
