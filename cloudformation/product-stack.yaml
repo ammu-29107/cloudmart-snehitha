@@ -105,6 +105,7 @@ Resources:
                   - !Sub >
                     arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:*
 
+
         # --------------------------------------------------------
         # INVOKE PRODUCT LAMBDA
         # --------------------------------------------------------
@@ -216,7 +217,7 @@ Resources:
 
 
   # ==============================================================
-  # AUTHORIZE FUNCTION URL INVOKE PERMISSION
+  # AUTHORIZE LAMBDA FUNCTION URL INVOKE PERMISSION
   # ==============================================================
 
   AuthorizerFunctionInvokePermission:
@@ -263,7 +264,6 @@ Resources:
 
       Policies:
 
-
         # --------------------------------------------------------
         # SSM
         # --------------------------------------------------------
@@ -283,6 +283,7 @@ Resources:
                   - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudmart/${Environment}/database/name
                   - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudmart/${Environment}/database/username
                   - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudmart/${Environment}/inventory/low-stock-threshold
+
 
         # --------------------------------------------------------
         # CLOUDWATCH
@@ -390,7 +391,6 @@ Resources:
           ENVIRONMENT:
             !Ref Environment
 
-
           # ------------------------------------------------------
           # DATABASE
           # ------------------------------------------------------
@@ -427,6 +427,42 @@ Resources:
 
           LOW_STOCK_TOPIC_ARN:
             !Ref LowStockTopic
+
+
+  # ==============================================================
+  # PRODUCT LAMBDA FUNCTION URL
+  # ==============================================================
+
+  ProductFunctionUrl:
+    Type: AWS::Lambda::Url
+    Properties:
+
+      TargetFunctionArn:
+        !GetAtt ProductLambda.Arn
+
+      AuthType:
+        NONE
+
+
+  # ==============================================================
+  # PRODUCT FUNCTION URL PERMISSION
+  # ==============================================================
+
+  ProductFunctionUrlPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+
+      FunctionName:
+        !Ref ProductLambda
+
+      Action:
+        lambda:InvokeFunctionUrl
+
+      Principal: '*'
+
+      FunctionUrlAuthType:
+        NONE
+
 
   # ==============================================================
   # AUTHORIZE INTERNAL INVOCATION OF PRODUCT LAMBDA
@@ -618,6 +654,12 @@ Outputs:
     Description: Product Lambda ARN
     Value:
       !GetAtt ProductLambda.Arn
+
+
+  ProductFunctionUrl:
+    Description: Product Lambda Function URL
+    Value:
+      !GetAtt ProductFunctionUrl.FunctionUrl
 
 
   AuthorizerFunctionUrl:
