@@ -7,6 +7,8 @@ import datetime
 import boto3
 import pymysql
 
+from src.shared.auth import authorize
+
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -102,6 +104,23 @@ def handler(event, context):
         method=method,
         path=path
     )
+
+    # ============================================================
+    # AUTHORIZATION
+    # ============================================================
+
+    if not authorize(event):
+        return respond(
+            401,
+            {
+                "success": False,
+                "error": {
+                    "code": "UNAUTHORIZED",
+                    "message": "Missing or invalid authorization token"
+                }
+            },
+            request_id
+        )
 
     # ============================================================
     # BUSINESS ROUTING
