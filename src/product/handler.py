@@ -7,7 +7,7 @@ import datetime
 import boto3
 import pymysql
 
-from src.shared.auth import authorize
+from shared.auth import authorize
 
 
 logger = logging.getLogger()
