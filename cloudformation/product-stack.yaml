@@ -83,8 +83,7 @@ Resources:
                 Action:
                   - ssm:GetParameter
                 Resource:
-                  - !Sub >
-                    arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudmart/${Environment}/auth/token
+                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudmart/${Environment}/auth/token
 
 
         # --------------------------------------------------------
@@ -102,8 +101,7 @@ Resources:
                   - logs:CreateLogStream
                   - logs:PutLogEvents
                 Resource:
-                  - !Sub >
-                    arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:*
+                  - !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:*
 
 
         # --------------------------------------------------------
@@ -301,8 +299,7 @@ Resources:
                   - logs:CreateLogStream
                   - logs:PutLogEvents
                 Resource:
-                  - !Sub >
-                    arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:*
+                  - !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:*
 
 
         # --------------------------------------------------------
@@ -319,8 +316,7 @@ Resources:
                   - events:PutEvents
 
                 Resource:
-                  - !Sub >
-                    arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/cloudmart-${Environment}-bus
+                  - !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/cloudmart-${Environment}-bus
 
 
         # --------------------------------------------------------
@@ -595,8 +591,7 @@ Resources:
                   - logs:PutLogEvents
 
                 Resource:
-                  - !Sub >
-                    arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:*
+                  - !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:*
 
 
   # ==============================================================
