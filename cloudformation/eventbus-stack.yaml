@@ -42,10 +42,14 @@ Resources:
         {
           "Version": "2012-10-17",
           "Statement": [{
+            "Sid": "AllowEventBridgeToWriteLowStockLogs",
             "Effect": "Allow",
             "Principal": {"Service": "events.amazonaws.com"},
-            "Action": "logs:PutLogEvents",
-            "Resource": "${LowStockLogGroup.Arn}"
+            "Action": [
+              "logs:CreateLogStream",
+              "logs:PutLogEvents"
+            ],
+            "Resource": "${LowStockLogGroup.Arn}:*"
           }]
         }
 
