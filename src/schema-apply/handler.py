@@ -73,7 +73,9 @@ DDL_STATEMENTS = [
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
       FOREIGN KEY (category_id) REFERENCES categories(category_id),
       INDEX idx_products_category (category_id),
-      INDEX idx_products_status (status)
+      INDEX idx_products_status (status),
+      CONSTRAINT chk_products_stock_nonnegative
+        CHECK (stock_quantity >= 0)
     )
     """,
 
