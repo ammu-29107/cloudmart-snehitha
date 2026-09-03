@@ -1,60 +1,495 @@
 AWSTemplateFormatVersion: '2010-09-09'
+
 Description: >
-  CloudMart database-stack — RDS MySQL, single-AZ, in private subnet A.
-  The DB subnet group references both private subnets because AWS
-  requires at least two AZs on a subnet group even for a single-AZ
-  instance; private subnet B never hosts the live instance itself.
-  Uses ManageMasterUserPassword so AWS generates and stores the
-  password in Secrets Manager under an AWS-managed key — no password
-  is ever typed, committed, or stored as a GitHub secret.
+  CloudMart database stack — RDS MySQL, single-AZ, in private subnet A.
+  The database password is generated inside AWS by a Lambda-backed
+  CloudFormation custom resource and stored as an SSM Parameter Store
+  SecureString. RDS retrieves the password using an SSM SecureString
+  dynamic reference. No Secrets Manager database secret is created.
 
 Parameters:
+
   Environment:
     Type: String
-    AllowedValues: [dev, prod]
+    AllowedValues:
+      - dev
+      - prod
+
   DbInstanceClass:
     Type: String
     Default: db.t3.micro
 
+
 Resources:
+
+  # ------------------------------------------------------------
+  # DB SUBNET GROUP
+  # ------------------------------------------------------------
 
   DbSubnetGroup:
     Type: AWS::RDS::DBSubnetGroup
+
     Properties:
-      DBSubnetGroupDescription: !Sub cloudmart-${Environment}-db-subnet-group
+      DBSubnetGroupDescription: !Sub
+        - cloudmart-${Environment}-db-subnet-group
+        - Environment: !Ref Environment
+
       SubnetIds:
-        - Fn::ImportValue: !Sub cloudmart-${Environment}-private-subnet-a
-        - Fn::ImportValue: !Sub cloudmart-${Environment}-private-subnet-b
+        - Fn::ImportValue: !Sub
+            - cloudmart-${Environment}-private-subnet-a
+            - Environment: !Ref Environment
+
+        - Fn::ImportValue: !Sub
+            - cloudmart-${Environment}-private-subnet-b
+            - Environment: !Ref Environment
+
+
+  # ------------------------------------------------------------
+  # PASSWORD GENERATOR LAMBDA IAM ROLE
+  # ------------------------------------------------------------
+
+  PasswordGeneratorRole:
+    Type: AWS::IAM::Role
+
+    Properties:
+
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+
+        Statement:
+          - Effect: Allow
+
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+
+            Action:
+              - sts:AssumeRole
+
+      Policies:
+
+        - PolicyName: GenerateDatabasePassword
+
+          PolicyDocument:
+            Version: '2012-10-17'
+
+            Statement:
+
+              # Lambda needs CloudWatch Logs
+              - Effect: Allow
+
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+
+                Resource: "*"
+
+
+              # Lambda creates/updates the SSM SecureString
+              - Effect: Allow
+
+                Action:
+                  - ssm:PutParameter
+                  - ssm:GetParameter
+                  - ssm:DeleteParameter
+
+                Resource: !Sub
+                  - arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudmart/${Environment}/database/password
+                  - Environment: !Ref Environment
+
+
+  # ------------------------------------------------------------
+  # PASSWORD GENERATOR LAMBDA
+  # ------------------------------------------------------------
+
+  PasswordGeneratorFunction:
+    Type: AWS::Lambda::Function
+
+    Properties:
+
+      FunctionName: !Sub cloudmart-${Environment}-password-generator
+
+      Runtime: python3.12
+
+      Handler: index.lambda_handler
+
+      Role: !GetAtt PasswordGeneratorRole.Arn
+
+      Timeout: 60
+
+      Code:
+        ZipFile: |
+          import json
+          import secrets
+          import string
+          import urllib.request
+          import boto3
+
+          ssm = boto3.client("ssm")
+
+
+          def send_response(event, context, status, data=None, reason=None):
+              response_url = event["ResponseURL"]
+
+              response_body = {
+                  "Status": status,
+                  "Reason": reason or "See CloudWatch Logs",
+                  "PhysicalResourceId": event.get(
+                      "PhysicalResourceId",
+                      context.log_stream_name
+                  ),
+                  "StackId": event["StackId"],
+                  "RequestId": event["RequestId"],
+                  "LogicalResourceId": event["LogicalResourceId"],
+                  "Data": data or {}
+              }
+
+              body = json.dumps(response_body).encode("utf-8")
+
+              request = urllib.request.Request(
+                  response_url,
+                  data=body,
+                  method="PUT"
+              )
+
+              request.add_header(
+                  "Content-Type",
+                  ""
+              )
+
+              request.add_header(
+                  "Content-Length",
+                  str(len(body))
+              )
+
+              urllib.request.urlopen(request)
+
+
+          def generate_password():
+              # RDS MySQL master password:
+              # 8-41 characters.
+              #
+              # Use a deliberately safe character set so that
+              # shell/SQL/special-character handling is minimized.
+
+              alphabet = (
+                  string.ascii_letters
+                  + string.digits
+                  + "!#$%^&*_-+="
+              )
+
+              return "".join(
+                  secrets.choice(alphabet)
+                  for _ in range(32)
+              )
+
+
+          def lambda_handler(event, context):
+
+              print(
+                  json.dumps(
+                      {
+                          "RequestType": event.get("RequestType"),
+                          "LogicalResourceId": event.get(
+                              "LogicalResourceId"
+                          )
+                      }
+                  )
+              )
+
+              request_type = event["RequestType"]
+
+              environment = event["ResourceProperties"]["Environment"]
+
+              parameter_name = (
+                  f"/cloudmart/{environment}/database/password"
+              )
+
+              try:
+
+                  # ------------------------------------------------
+                  # CREATE
+                  # ------------------------------------------------
+
+                  if request_type == "Create":
+
+                      # Check whether parameter already exists.
+                      #
+                      # This makes the operation safer if CloudFormation
+                      # retries the custom resource request.
+
+                      try:
+
+                          ssm.get_parameter(
+                              Name=parameter_name,
+                              WithDecryption=True
+                          )
+
+                          print(
+                              "SSM database password already exists."
+                          )
+
+                      except ssm.exceptions.ParameterNotFound:
+
+                          password = generate_password()
+
+                          ssm.put_parameter(
+                              Name=parameter_name,
+                              Description=(
+                                  f"CloudMart {environment} "
+                                  "RDS MySQL master password"
+                              ),
+                              Value=password,
+                              Type="SecureString",
+                              Overwrite=False
+                          )
+
+                          print(
+                              "Generated and stored database "
+                              "password in SSM."
+                          )
+
+
+                  # ------------------------------------------------
+                  # UPDATE
+                  # ------------------------------------------------
+
+                  elif request_type == "Update":
+
+                      # Do NOT generate a new password on stack update.
+                      #
+                      # Otherwise CloudFormation could update the
+                      # RDS password unexpectedly.
+
+                      print(
+                          "Stack update detected. "
+                          "Existing database password retained."
+                      )
+
+
+                  # ------------------------------------------------
+                  # DELETE
+                  # ------------------------------------------------
+
+                  elif request_type == "Delete":
+
+                      try:
+
+                          ssm.delete_parameter(
+                              Name=parameter_name
+                          )
+
+                          print(
+                              "Deleted database password "
+                              "from SSM."
+                          )
+
+                      except ssm.exceptions.ParameterNotFound:
+
+                          print(
+                              "SSM password parameter "
+                              "already absent."
+                          )
+
+
+                  send_response(
+                      event,
+                      context,
+                      "SUCCESS",
+                      {
+                          "ParameterName": parameter_name
+                      }
+                  )
+
+
+              except Exception as exc:
+
+                  print(
+                      f"Password generation failed: {exc}"
+                  )
+
+                  send_response(
+                      event,
+                      context,
+                      "FAILED",
+                      reason=str(exc)
+                  )
+
+
+  # ------------------------------------------------------------
+  # CUSTOM RESOURCE
+  #
+  # This MUST complete before RDS is created.
+  # ------------------------------------------------------------
+
+  DatabasePassword:
+    Type: Custom::DatabasePassword
+
+    DependsOn:
+      - PasswordGeneratorFunction
+
+    Properties:
+
+      ServiceToken: !GetAtt PasswordGeneratorFunction.Arn
+
+      Environment: !Ref Environment
+
+
+  # ------------------------------------------------------------
+  # RDS MYSQL
+  # ------------------------------------------------------------
 
   RdsInstance:
     Type: AWS::RDS::DBInstance
+
     DeletionPolicy: Snapshot
+
+    DependsOn:
+      - DatabasePassword
+
     Properties:
-      DBInstanceIdentifier: !Sub cloudmart-${Environment}-mysql
+
+      DBInstanceIdentifier: !Sub
+        - cloudmart-${Environment}-mysql
+        - Environment: !Ref Environment
+
       Engine: mysql
+
       EngineVersion: '8.0'
+
       DBInstanceClass: !Ref DbInstanceClass
+
       AllocatedStorage: '20'
+
       StorageType: gp2
+
       DBName: cloudmart
+
       MasterUsername: cloudmart_admin
-      ManageMasterUserPassword: true
+
+      # ----------------------------------------------------------
+      # IMPORTANT
+      #
+      # RDS no longer manages the password through Secrets Manager.
+      #
+      # CloudFormation retrieves the SecureString from SSM at
+      # deployment time using this dynamic reference.
+      # ----------------------------------------------------------
+
+      MasterUserPassword: !Sub
+        '{{resolve:ssm-secure:/cloudmart/${Environment}/database/password}}'
+
       MultiAZ: false
+
       DBSubnetGroupName: !Ref DbSubnetGroup
+
       VPCSecurityGroups:
-        - Fn::ImportValue: !Sub cloudmart-${Environment}-sg-rds
+
+        - Fn::ImportValue: !Sub
+            - cloudmart-${Environment}-sg-rds
+            - Environment: !Ref Environment
+
       PubliclyAccessible: false
+
       StorageEncrypted: true
-      BackupRetentionPeriod: 1   # free-tier accounts reject longer retention periods
+
+      BackupRetentionPeriod: 1
+
+
+  # ------------------------------------------------------------
+  # SSM DATABASE PARAMETERS
+  # ------------------------------------------------------------
+
+  DatabaseHostParameter:
+    Type: AWS::SSM::Parameter
+
+    Properties:
+
+      Name: !Sub /cloudmart/${Environment}/database/host
+
+      Type: String
+
+      Value: !GetAtt RdsInstance.Endpoint.Address
+
+      Description: !Sub
+        - CloudMart ${Environment} RDS endpoint
+        - Environment: !Ref Environment
+
+
+  DatabaseNameParameter:
+    Type: AWS::SSM::Parameter
+
+    Properties:
+
+      Name: !Sub /cloudmart/${Environment}/database/name
+
+      Type: String
+
+      Value: cloudmart
+
+      Description: !Sub
+        - CloudMart ${Environment} database name
+        - Environment: !Ref Environment
+
+
+  DatabaseUsernameParameter:
+    Type: AWS::SSM::Parameter
+
+    Properties:
+
+      Name: !Sub /cloudmart/${Environment}/database/username
+
+      Type: String
+
+      Value: cloudmart_admin
+
+      Description: !Sub
+        - CloudMart ${Environment} database username
+        - Environment: !Ref Environment
+
+
+# --------------------------------------------------------------
+# OUTPUTS
+# --------------------------------------------------------------
 
 Outputs:
+
   RdsEndpointAddress:
+
+    Description: RDS endpoint address
+
     Value: !GetAtt RdsInstance.Endpoint.Address
-    Export: {Name: !Sub 'cloudmart-${Environment}-rds-endpoint'}
+
+    Export:
+      Name: !Sub
+        - cloudmart-${Environment}-rds-endpoint
+        - Environment: !Ref Environment
+
+
   RdsEndpointPort:
+
+    Description: RDS endpoint port
+
     Value: !GetAtt RdsInstance.Endpoint.Port
-    Export: {Name: !Sub 'cloudmart-${Environment}-rds-port'}
-  RdsSecretArn:
-    Value: !GetAtt RdsInstance.MasterUserSecret.SecretArn
-    Description: Secrets Manager ARN holding the generated master password — the pipeline reads this to seed SSM
-    Export: {Name: !Sub 'cloudmart-${Environment}-rds-secret-arn'}
+
+    Export:
+      Name: !Sub
+        - cloudmart-${Environment}-rds-port
+        - Environment: !Ref Environment
+
+
+  RdsSsmPasswordParameter:
+
+    Description: >
+      SSM Parameter Store SecureString containing the
+      generated RDS master password.
+
+    Value: !Sub
+      - /cloudmart/${Environment}/database/password
+      - Environment: !Ref Environment
+
+    Export:
+      Name: !Sub
+        - cloudmart-${Environment}-rds-password-param
+        - Environment: !Ref Environment

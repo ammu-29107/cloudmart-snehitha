@@ -306,6 +306,10 @@ jobs:
           aws-region: ${{ secrets.AWS_REGION }}
 
 
+      # ========================================================
+      # DETERMINE CHANGE SET TYPE
+      # ========================================================
+
       - name: Determine change set type
 
         id: stack-check
@@ -319,13 +323,19 @@ jobs:
 
           echo "Current stack status: $STACK_STATUS"
 
+
           if [ "$STACK_STATUS" = "NOT_FOUND" ] ||
              [ "$STACK_STATUS" = "REVIEW_IN_PROGRESS" ]; then
 
             echo "changeset_type=CREATE" >> "$GITHUB_OUTPUT"
 
+
           elif [ "$STACK_STATUS" = "ROLLBACK_COMPLETE" ] ||
                [ "$STACK_STATUS" = "ROLLBACK_FAILED" ]; then
+
+            echo "Database stack is in $STACK_STATUS."
+
+            echo "Deleting failed stack before recreating it..."
 
             aws cloudformation delete-stack \
               --stack-name "$STACK_NAME"
@@ -335,12 +345,17 @@ jobs:
 
             echo "changeset_type=CREATE" >> "$GITHUB_OUTPUT"
 
+
           else
 
             echo "changeset_type=UPDATE" >> "$GITHUB_OUTPUT"
 
           fi
 
+
+      # ========================================================
+      # CREATE CHANGE SET
+      # ========================================================
 
       - name: Create change set
 
@@ -356,6 +371,10 @@ jobs:
               ParameterKey=DbInstanceClass,ParameterValue=db.t3.micro \
             --capabilities CAPABILITY_NAMED_IAM
 
+
+      # ========================================================
+      # WAIT FOR CHANGE SET
+      # ========================================================
 
       - name: Wait for change set
 
@@ -377,10 +396,13 @@ jobs:
 
             echo "Attempt $i/20 - Status: $STATUS"
 
+
             if [ "$STATUS" = "CREATE_COMPLETE" ]; then
 
               echo "ready=true" >> "$GITHUB_ENV"
+
               break
+
 
             elif [ "$STATUS" = "FAILED" ]; then
 
@@ -388,14 +410,17 @@ jobs:
                 grep -qi "didn't contain changes\|No updates"; then
 
                 echo "ready=nochange" >> "$GITHUB_ENV"
+
                 break
 
               else
 
                 echo "Change set failed: $REASON"
+
                 exit 1
 
               fi
+
 
             else
 
@@ -405,6 +430,10 @@ jobs:
 
           done
 
+
+      # ========================================================
+      # EXECUTE CHANGE SET
+      # ========================================================
 
       - name: Execute change set
 
@@ -416,6 +445,10 @@ jobs:
             --stack-name "$STACK_NAME" \
             --change-set-name "$CHANGESET_NAME"
 
+
+      # ========================================================
+      # WAIT FOR DATABASE STACK
+      # ========================================================
 
       - name: Wait for database stack
 
@@ -432,17 +465,28 @@ jobs:
 
             echo "Attempt $i/60 - Stack status: $STATUS"
 
+
             case "$STATUS" in
 
               CREATE_COMPLETE|UPDATE_COMPLETE)
+
+                echo "Database stack deployed successfully."
+
                 exit 0
+
                 ;;
+
 
               *IN_PROGRESS)
+
                 sleep 30
+
                 ;;
 
+
               *FAILED|*ROLLBACK_COMPLETE)
+
+                echo "Database stack failed."
 
                 aws cloudformation describe-stack-events \
                   --stack-name "$STACK_NAME" \
@@ -450,10 +494,14 @@ jobs:
                   --output table
 
                 exit 1
+
                 ;;
 
+
               *)
+
                 sleep 30
+
                 ;;
 
             esac
@@ -462,61 +510,42 @@ jobs:
 
 
       # ========================================================
-      # BRIDGE RDS PASSWORD INTO SSM
+      # VERIFY DATABASE SSM PARAMETERS
       # ========================================================
 
-      - name: Bridge RDS password into SSM
+      - name: Verify database SSM parameters
 
         run: |
 
-          SECRET_ARN=$(aws cloudformation describe-stacks \
-            --stack-name "$STACK_NAME" \
-            --query "Stacks[0].Outputs[?OutputKey=='RdsSecretArn'].OutputValue" \
-            --output text)
+          echo "Checking database SSM parameters..."
 
 
-          DB_PASSWORD=$(aws secretsmanager get-secret-value \
-            --secret-id "$SECRET_ARN" \
-            --query "SecretString" \
-            --output text |
-            python3 -c "import sys,json; print(json.load(sys.stdin)['password'])")
-
-
-          RDS_HOST=$(aws cloudformation describe-stacks \
-            --stack-name "$STACK_NAME" \
-            --query "Stacks[0].Outputs[?OutputKey=='RdsEndpointAddress'].OutputValue" \
-            --output text)
-
-
-          aws ssm put-parameter \
-            --name "/cloudmart/dev/database/password" \
-            --type SecureString \
-            --value "$DB_PASSWORD" \
-            --overwrite
-
-
-          aws ssm put-parameter \
+          aws ssm get-parameter \
             --name "/cloudmart/dev/database/host" \
-            --type String \
-            --value "$RDS_HOST" \
-            --overwrite
+            --query "Parameter.Name" \
+            --output text
 
 
-          aws ssm put-parameter \
+          aws ssm get-parameter \
             --name "/cloudmart/dev/database/name" \
-            --type String \
-            --value "cloudmart" \
-            --overwrite
+            --query "Parameter.Name" \
+            --output text
 
 
-          aws ssm put-parameter \
+          aws ssm get-parameter \
             --name "/cloudmart/dev/database/username" \
-            --type String \
-            --value "cloudmart_admin" \
-            --overwrite
+            --query "Parameter.Name" \
+            --output text
 
 
-          echo "SSM database parameters written."
+          aws ssm get-parameter \
+            --name "/cloudmart/dev/database/password" \
+            --with-decryption \
+            --query "Parameter.Name" \
+            --output text
+
+
+          echo "Database SSM parameters verified successfully."
 
 
   # ============================================================
