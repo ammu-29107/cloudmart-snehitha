@@ -1,32 +1,40 @@
 name: CloudMart Deploy - Network, Database, Storage, Eventbus, Product
 
+
 on:
 
   push:
+
     branches:
       - main
 
     paths:
+
       - 'cloudformation/network-stack.yaml'
       - 'cloudformation/database-stack.yaml'
       - 'cloudformation/storage-stack.yaml'
       - 'cloudformation/eventbus-stack.yaml'
       - 'cloudformation/product-stack.yaml'
+
       - 'src/product/**'
       - 'src/authorizer/**'
       - 'src/shared/**'
       - 'src/schema-apply/**'
+
       - '.github/workflows/deploy.yaml'
+
 
   workflow_dispatch:
 
 
 permissions:
+
   id-token: write
   contents: read
 
 
 jobs:
+
 
   # ============================================================
   # JOB 0
@@ -47,13 +55,16 @@ jobs:
       - uses: aws-actions/configure-aws-credentials@v4
 
         with:
+
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+
           aws-region: ${{ secrets.AWS_REGION }}
 
 
       - name: Verify identity
 
         run: |
+
           aws sts get-caller-identity
 
 
@@ -113,7 +124,9 @@ jobs:
       - uses: aws-actions/configure-aws-credentials@v4
 
         with:
+
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+
           aws-region: ${{ secrets.AWS_REGION }}
 
 
@@ -128,12 +141,15 @@ jobs:
             --query 'Stacks[0].StackStatus' \
             --output text 2>/dev/null || echo "NOT_FOUND")
 
+
           echo "Current stack status: $STACK_STATUS"
+
 
           if [ "$STACK_STATUS" = "NOT_FOUND" ] ||
              [ "$STACK_STATUS" = "REVIEW_IN_PROGRESS" ]; then
 
             echo "changeset_type=CREATE" >> "$GITHUB_OUTPUT"
+
 
           elif [ "$STACK_STATUS" = "ROLLBACK_COMPLETE" ] ||
                [ "$STACK_STATUS" = "ROLLBACK_FAILED" ]; then
@@ -145,6 +161,7 @@ jobs:
               --stack-name "$STACK_NAME"
 
             echo "changeset_type=CREATE" >> "$GITHUB_OUTPUT"
+
 
           else
 
@@ -179,18 +196,23 @@ jobs:
               --query 'Status' \
               --output text)
 
+
             REASON=$(aws cloudformation describe-change-set \
               --stack-name "$STACK_NAME" \
               --change-set-name "$CHANGESET_NAME" \
               --query 'StatusReason' \
               --output text)
 
+
             echo "Attempt $i/20 - Status: $STATUS"
+
 
             if [ "$STATUS" = "CREATE_COMPLETE" ]; then
 
               echo "ready=true" >> "$GITHUB_ENV"
+
               break
+
 
             elif [ "$STATUS" = "FAILED" ]; then
 
@@ -198,14 +220,17 @@ jobs:
                 grep -qi "didn't contain changes\|No updates"; then
 
                 echo "ready=nochange" >> "$GITHUB_ENV"
+
                 break
 
               else
 
                 echo "Change set failed: $REASON"
+
                 exit 1
 
               fi
+
 
             else
 
@@ -240,17 +265,23 @@ jobs:
               --query 'Stacks[0].StackStatus' \
               --output text)
 
+
             echo "Attempt $i/40 - Stack status: $STATUS"
+
 
             case "$STATUS" in
 
               CREATE_COMPLETE|UPDATE_COMPLETE)
+
                 exit 0
                 ;;
 
+
               *IN_PROGRESS)
+
                 sleep 30
                 ;;
+
 
               *FAILED|*ROLLBACK_COMPLETE)
 
@@ -262,7 +293,9 @@ jobs:
                 exit 1
                 ;;
 
+
               *)
+
                 sleep 30
                 ;;
 
@@ -302,7 +335,9 @@ jobs:
       - uses: aws-actions/configure-aws-credentials@v4
 
         with:
+
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+
           aws-region: ${{ secrets.AWS_REGION }}
 
 
@@ -321,6 +356,7 @@ jobs:
             --query 'Stacks[0].StackStatus' \
             --output text 2>/dev/null || echo "NOT_FOUND")
 
+
           echo "Current stack status: $STACK_STATUS"
 
 
@@ -337,11 +373,14 @@ jobs:
 
             echo "Deleting failed stack before recreating it..."
 
+
             aws cloudformation delete-stack \
               --stack-name "$STACK_NAME"
 
+
             aws cloudformation wait stack-delete-complete \
               --stack-name "$STACK_NAME"
+
 
             echo "changeset_type=CREATE" >> "$GITHUB_OUTPUT"
 
@@ -360,6 +399,12 @@ jobs:
       - name: Create change set
 
         run: |
+
+          test -s "$TEMPLATE_FILE" || {
+            echo "ERROR: $TEMPLATE_FILE is empty."
+            exit 1
+          }
+
 
           aws cloudformation create-change-set \
             --stack-name "$STACK_NAME" \
@@ -388,11 +433,13 @@ jobs:
               --query 'Status' \
               --output text)
 
+
             REASON=$(aws cloudformation describe-change-set \
               --stack-name "$STACK_NAME" \
               --change-set-name "$CHANGESET_NAME" \
               --query 'StatusReason' \
               --output text)
+
 
             echo "Attempt $i/20 - Status: $STATUS"
 
@@ -463,6 +510,7 @@ jobs:
               --query 'Stacks[0].StackStatus' \
               --output text)
 
+
             echo "Attempt $i/60 - Stack status: $STATUS"
 
 
@@ -473,14 +521,12 @@ jobs:
                 echo "Database stack deployed successfully."
 
                 exit 0
-
                 ;;
 
 
               *IN_PROGRESS)
 
                 sleep 30
-
                 ;;
 
 
@@ -488,20 +534,20 @@ jobs:
 
                 echo "Database stack failed."
 
+
                 aws cloudformation describe-stack-events \
                   --stack-name "$STACK_NAME" \
                   --query 'StackEvents[:15].{Time:Timestamp,Status:ResourceStatus,Resource:LogicalResourceId,Reason:ResourceStatusReason}' \
                   --output table
 
-                exit 1
 
+                exit 1
                 ;;
 
 
               *)
 
                 sleep 30
-
                 ;;
 
             esac
@@ -515,10 +561,16 @@ jobs:
 
       - name: Verify database SSM parameters
 
+        if: env.ready == 'true'
+
         run: |
 
           echo "Checking database SSM parameters..."
 
+
+          # ----------------------------------------------------
+          # DATABASE HOST
+          # ----------------------------------------------------
 
           aws ssm get-parameter \
             --name "/cloudmart/dev/database/host" \
@@ -526,11 +578,19 @@ jobs:
             --output text
 
 
+          # ----------------------------------------------------
+          # DATABASE NAME
+          # ----------------------------------------------------
+
           aws ssm get-parameter \
             --name "/cloudmart/dev/database/name" \
             --query "Parameter.Name" \
             --output text
 
+
+          # ----------------------------------------------------
+          # DATABASE USERNAME
+          # ----------------------------------------------------
 
           aws ssm get-parameter \
             --name "/cloudmart/dev/database/username" \
@@ -538,11 +598,20 @@ jobs:
             --output text
 
 
+          # ----------------------------------------------------
+          # DATABASE PASSWORD
+          #
+          # We intentionally DO NOT use --with-decryption here.
+          #
+          # We only need to verify that the SecureString exists.
+          # The password itself must not be printed into the
+          # GitHub Actions logs.
+          # ----------------------------------------------------
+
           aws ssm get-parameter \
             --name "/cloudmart/dev/database/password" \
-            --with-decryption \
-            --query "Parameter.Name" \
-            --output text
+            --query "Parameter.{Name:Name,Type:Type}" \
+            --output table
 
 
           echo "Database SSM parameters verified successfully."
@@ -579,7 +648,9 @@ jobs:
       - uses: aws-actions/configure-aws-credentials@v4
 
         with:
+
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+
           aws-region: ${{ secrets.AWS_REGION }}
 
 
@@ -594,10 +665,12 @@ jobs:
             --query 'Stacks[0].StackStatus' \
             --output text 2>/dev/null || echo "NOT_FOUND")
 
+
           if [ "$STACK_STATUS" = "NOT_FOUND" ] ||
              [ "$STACK_STATUS" = "REVIEW_IN_PROGRESS" ]; then
 
             echo "changeset_type=CREATE" >> "$GITHUB_OUTPUT"
+
 
           elif [ "$STACK_STATUS" = "ROLLBACK_COMPLETE" ] ||
                [ "$STACK_STATUS" = "ROLLBACK_FAILED" ]; then
@@ -605,10 +678,13 @@ jobs:
             aws cloudformation delete-stack \
               --stack-name "$STACK_NAME"
 
+
             aws cloudformation wait stack-delete-complete \
               --stack-name "$STACK_NAME"
 
+
             echo "changeset_type=CREATE" >> "$GITHUB_OUTPUT"
+
 
           else
 
@@ -625,6 +701,7 @@ jobs:
             echo "ERROR: $TEMPLATE_FILE is empty."
             exit 1
           }
+
 
           aws cloudformation create-change-set \
             --stack-name "$STACK_NAME" \
@@ -648,18 +725,23 @@ jobs:
               --query 'Status' \
               --output text)
 
+
             REASON=$(aws cloudformation describe-change-set \
               --stack-name "$STACK_NAME" \
               --change-set-name "$CHANGESET_NAME" \
               --query 'StatusReason' \
               --output text)
 
+
             echo "Attempt $i/20 - Status: $STATUS"
+
 
             if [ "$STATUS" = "CREATE_COMPLETE" ]; then
 
               echo "ready=true" >> "$GITHUB_ENV"
+
               break
+
 
             elif [ "$STATUS" = "FAILED" ]; then
 
@@ -667,14 +749,17 @@ jobs:
                 grep -qi "didn't contain changes\|No updates"; then
 
                 echo "ready=nochange" >> "$GITHUB_ENV"
+
                 break
 
               else
 
                 echo "Change set failed: $REASON"
+
                 exit 1
 
               fi
+
 
             else
 
@@ -709,17 +794,23 @@ jobs:
               --query 'Stacks[0].StackStatus' \
               --output text)
 
+
             echo "Attempt $i/40 - Stack status: $STATUS"
+
 
             case "$STATUS" in
 
               CREATE_COMPLETE|UPDATE_COMPLETE)
+
                 exit 0
                 ;;
 
+
               *IN_PROGRESS)
+
                 sleep 30
                 ;;
+
 
               *FAILED|*ROLLBACK_COMPLETE)
 
@@ -731,7 +822,9 @@ jobs:
                 exit 1
                 ;;
 
+
               *)
+
                 sleep 30
                 ;;
 
@@ -771,7 +864,9 @@ jobs:
       - uses: aws-actions/configure-aws-credentials@v4
 
         with:
+
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+
           aws-region: ${{ secrets.AWS_REGION }}
 
 
@@ -786,10 +881,12 @@ jobs:
             --query 'Stacks[0].StackStatus' \
             --output text 2>/dev/null || echo "NOT_FOUND")
 
+
           if [ "$STACK_STATUS" = "NOT_FOUND" ] ||
              [ "$STACK_STATUS" = "REVIEW_IN_PROGRESS" ]; then
 
             echo "changeset_type=CREATE" >> "$GITHUB_OUTPUT"
+
 
           elif [ "$STACK_STATUS" = "ROLLBACK_COMPLETE" ] ||
                [ "$STACK_STATUS" = "ROLLBACK_FAILED" ]; then
@@ -797,10 +894,13 @@ jobs:
             aws cloudformation delete-stack \
               --stack-name "$STACK_NAME"
 
+
             aws cloudformation wait stack-delete-complete \
               --stack-name "$STACK_NAME"
 
+
             echo "changeset_type=CREATE" >> "$GITHUB_OUTPUT"
+
 
           else
 
@@ -817,6 +917,7 @@ jobs:
             echo "ERROR: $TEMPLATE_FILE is empty."
             exit 1
           }
+
 
           aws cloudformation create-change-set \
             --stack-name "$STACK_NAME" \
@@ -840,16 +941,20 @@ jobs:
               --query 'Status' \
               --output text)
 
+
             REASON=$(aws cloudformation describe-change-set \
               --stack-name "$STACK_NAME" \
               --change-set-name "$CHANGESET_NAME" \
               --query 'StatusReason' \
               --output text)
 
+
             if [ "$STATUS" = "CREATE_COMPLETE" ]; then
 
               echo "ready=true" >> "$GITHUB_ENV"
+
               break
+
 
             elif [ "$STATUS" = "FAILED" ]; then
 
@@ -857,14 +962,17 @@ jobs:
                 grep -qi "didn't contain changes\|No updates"; then
 
                 echo "ready=nochange" >> "$GITHUB_ENV"
+
                 break
 
               else
 
                 echo "Change set failed: $REASON"
+
                 exit 1
 
               fi
+
 
             else
 
@@ -899,15 +1007,20 @@ jobs:
               --query 'Stacks[0].StackStatus' \
               --output text)
 
+
             case "$STATUS" in
 
               CREATE_COMPLETE|UPDATE_COMPLETE)
+
                 exit 0
                 ;;
 
+
               *IN_PROGRESS)
+
                 sleep 30
                 ;;
+
 
               *FAILED|*ROLLBACK_COMPLETE)
 
@@ -919,7 +1032,9 @@ jobs:
                 exit 1
                 ;;
 
+
               *)
+
                 sleep 30
                 ;;
 
@@ -928,7 +1043,7 @@ jobs:
           done
 
 
-      # ============================================================
+  # ============================================================
   # JOB 5
   # PRODUCT STACK
   # ============================================================
@@ -953,6 +1068,7 @@ jobs:
 
     steps:
 
+
       # ========================================================
       # CHECKOUT
       # ========================================================
@@ -965,7 +1081,9 @@ jobs:
       # ========================================================
 
       - uses: actions/setup-python@v5
+
         with:
+
           python-version: "3.12"
 
 
@@ -974,8 +1092,11 @@ jobs:
       # ========================================================
 
       - uses: aws-actions/configure-aws-credentials@v4
+
         with:
+
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+
           aws-region: ${{ secrets.AWS_REGION }}
 
 
@@ -1023,12 +1144,18 @@ jobs:
             --query "Exports[?Name=='cloudmart-dev-lambda-artifacts-bucket'].Value" \
             --output text)
 
+
           if [ -z "$BUCKET" ] || [ "$BUCKET" = "None" ]; then
+
             echo "ERROR: Lambda artifacts bucket export not found."
+
             exit 1
+
           fi
 
+
           echo "Lambda artifact bucket: $BUCKET"
+
 
           echo "name=$BUCKET" >> "$GITHUB_OUTPUT"
 
@@ -1061,28 +1188,37 @@ jobs:
             exit 1
           }
 
+
           test -f src/shared/auth.py || {
             echo "ERROR: src/shared/auth.py not found."
             exit 1
           }
 
+
           cp src/product/handler.py \
             build/product/handler.py
 
+
           mkdir -p build/product/shared
+
 
           cp src/shared/auth.py \
             build/product/shared/auth.py
+
 
           pip install pymysql \
             -t build/product \
             --break-system-packages
 
+
           cd build/product
+
 
           zip -r ../../product.zip .
 
+
           cd ../..
+
 
           aws s3 cp \
             product.zip \
@@ -1091,11 +1227,6 @@ jobs:
 
       # ========================================================
       # PACKAGE AUTHORIZE LAMBDA
-      #
-      # IMPORTANT:
-      # This is a standalone Lambda.
-      # No src/shared is copied.
-      # No pymysql is required.
       # ========================================================
 
       - name: Package Authorizer Lambda
@@ -1107,14 +1238,19 @@ jobs:
             exit 1
           }
 
+
           cp src/authorizer/lambda_function.py \
             build/authorizer/lambda_function.py
 
+
           cd build/authorizer
+
 
           zip -r ../../authorizer.zip .
 
+
           cd ../..
+
 
           aws s3 cp \
             authorizer.zip \
@@ -1134,18 +1270,24 @@ jobs:
             exit 1
           }
 
+
           cp src/schema-apply/handler.py \
             build/schema-apply/handler.py
+
 
           pip install pymysql \
             -t build/schema-apply \
             --break-system-packages
 
+
           cd build/schema-apply
+
 
           zip -r ../../schema-apply.zip .
 
+
           cd ../..
+
 
           aws s3 cp \
             schema-apply.zip \
@@ -1167,6 +1309,7 @@ jobs:
             --query 'Stacks[0].StackStatus' \
             --output text 2>/dev/null || echo "NOT_FOUND")
 
+
           echo "Current product stack status: $STACK_STATUS"
 
 
@@ -1175,6 +1318,7 @@ jobs:
             NOT_FOUND|REVIEW_IN_PROGRESS)
 
               echo "changeset_type=CREATE" >> "$GITHUB_OUTPUT"
+
               ;;
 
 
@@ -1182,41 +1326,53 @@ jobs:
 
               echo "Deleting failed product stack..."
 
+
               aws cloudformation delete-stack \
                 --stack-name "$STACK_NAME"
+
 
               aws cloudformation wait stack-delete-complete \
                 --stack-name "$STACK_NAME"
 
+
               echo "Stack deleted."
 
+
               echo "changeset_type=CREATE" >> "$GITHUB_OUTPUT"
+
               ;;
 
 
             UPDATE_ROLLBACK_IN_PROGRESS|UPDATE_ROLLBACK_FAILED|UPDATE_ROLLBACK_COMPLETE_CLEANUP_IN_PROGRESS|UPDATE_COMPLETE_CLEANUP_IN_PROGRESS)
 
               echo "ERROR: Product stack is currently in an unstable CloudFormation state."
+
               echo "Current state: $STACK_STATUS"
-              echo ""
+
+              echo
+
               echo "Resolve the stack state before running this deployment again."
 
               exit 1
+
               ;;
 
 
             CREATE_IN_PROGRESS|UPDATE_IN_PROGRESS|IMPORT_IN_PROGRESS|IMPORT_ROLLBACK_IN_PROGRESS)
 
               echo "ERROR: Product stack is already being modified."
+
               echo "Current state: $STACK_STATUS"
 
               exit 1
+
               ;;
 
 
             *)
 
               echo "changeset_type=UPDATE" >> "$GITHUB_OUTPUT"
+
               ;;
 
           esac
@@ -1266,23 +1422,30 @@ jobs:
               --query 'Status' \
               --output text)
 
+
             REASON=$(aws cloudformation describe-change-set \
               --stack-name "$STACK_NAME" \
               --change-set-name "$CHANGESET_NAME" \
               --query 'StatusReason' \
               --output text)
 
+
             echo "Attempt $i/20 - Status: $STATUS"
+
 
             if [ "$STATUS" = "CREATE_COMPLETE" ]; then
 
               echo "ready=true" >> "$GITHUB_ENV"
+
               break
+
 
             elif [ "$STATUS" = "FAILED" ]; then
 
               echo "Change set failed."
+
               echo "Reason: $REASON"
+
 
               if echo "$REASON" |
                 grep -qi "didn't contain changes\|No updates"; then
@@ -1298,6 +1461,7 @@ jobs:
                 exit 1
 
               fi
+
 
             else
 
@@ -1340,7 +1504,9 @@ jobs:
               --query 'Stacks[0].StackStatus' \
               --output text)
 
+
             echo "Attempt $i/40 - Stack status: $STATUS"
+
 
             case "$STATUS" in
 
@@ -1349,12 +1515,14 @@ jobs:
                 echo "Product stack healthy."
 
                 exit 0
+
                 ;;
 
 
               *IN_PROGRESS)
 
                 sleep 30
+
                 ;;
 
 
@@ -1362,23 +1530,28 @@ jobs:
 
                 echo "Product stack failed: $STATUS"
 
+
                 aws cloudformation describe-stack-events \
                   --stack-name "$STACK_NAME" \
                   --query 'StackEvents[:20].{Time:Timestamp,Status:ResourceStatus,Resource:LogicalResourceId,Reason:ResourceStatusReason}' \
                   --output table
 
+
                 exit 1
+
                 ;;
 
 
               *)
 
                 sleep 30
+
                 ;;
 
             esac
 
           done
+
 
           echo "ERROR: Product stack did not reach a stable state within the expected time."
 
@@ -1395,15 +1568,19 @@ jobs:
 
           echo "Invoking Schema Apply Lambda..."
 
+
           aws lambda invoke \
             --function-name cloudmart-dev-schema-apply \
             --payload '{}' \
             --cli-binary-format raw-in-base64-out \
             schema-response.json
 
+
           echo "Raw Schema Apply response:"
 
+
           cat schema-response.json
+
 
           echo
 
@@ -1419,12 +1596,9 @@ jobs:
 
 
           print("Lambda response:")
+
           print(json.dumps(response, indent=2))
 
-
-          # ----------------------------------------------------
-          # Detect Lambda-level failure
-          # ----------------------------------------------------
 
           if response.get("FunctionError"):
 
@@ -1436,10 +1610,6 @@ jobs:
 
               sys.exit(1)
 
-
-          # ----------------------------------------------------
-          # Extract response body safely
-          # ----------------------------------------------------
 
           if "body" not in response:
 
@@ -1457,6 +1627,7 @@ jobs:
           if isinstance(body, str):
 
               try:
+
                   payload = json.loads(body)
 
               except json.JSONDecodeError:
@@ -1473,14 +1644,12 @@ jobs:
 
 
           print("Schema Apply payload:")
+
           print(json.dumps(payload, indent=2))
 
 
-          # ----------------------------------------------------
-          # Check HTTP status
-          # ----------------------------------------------------
-
           status_code = response.get("statusCode")
+
 
           if status_code != 200:
 
@@ -1491,10 +1660,6 @@ jobs:
 
               sys.exit(1)
 
-
-          # ----------------------------------------------------
-          # Check application success
-          # ----------------------------------------------------
 
           if payload.get("success") is not True:
 
@@ -1526,6 +1691,7 @@ jobs:
             --query "Stacks[0].Outputs[?OutputKey=='ProductFunctionUrl'].OutputValue" \
             --output text)
 
+
           if [ -z "$PRODUCT_URL" ] || [ "$PRODUCT_URL" = "None" ]; then
 
             echo "ERROR: Product Function URL was not returned."
@@ -1534,7 +1700,9 @@ jobs:
 
           fi
 
+
           echo "Product URL: $PRODUCT_URL"
+
 
           echo "product_url=$PRODUCT_URL" >> "$GITHUB_OUTPUT"
 
@@ -1554,6 +1722,7 @@ jobs:
             --query "Stacks[0].Outputs[?OutputKey=='AuthorizerFunctionUrl'].OutputValue" \
             --output text)
 
+
           if [ -z "$AUTHORIZER_URL" ] || [ "$AUTHORIZER_URL" = "None" ]; then
 
             echo "ERROR: Authorizer Function URL was not returned."
@@ -1562,24 +1731,15 @@ jobs:
 
           fi
 
+
           echo "Authorizer URL: $AUTHORIZER_URL"
+
 
           echo "authorizer_url=$AUTHORIZER_URL" >> "$GITHUB_OUTPUT"
 
 
-            # ========================================================
+      # ========================================================
       # AUTHORIZE TEST
-      #
-      # The Function URL uses AuthType: NONE.
-      #
-      # Expected application response:
-      #   401 = Authorizer Lambda is reachable and correctly
-      #         rejects a request without a token.
-      #
-      # 403 can come from the Lambda Function URL permission
-      # configuration, so after retries we inspect the actual
-      # configuration instead of treating it indefinitely as
-      # propagation.
       # ========================================================
 
       - name: Smoke test - Authorizer rejects missing token
@@ -1588,15 +1748,21 @@ jobs:
 
           URL="${{ steps.authorizer.outputs.authorizer_url }}"
 
+
           echo "Testing Authorizer Function URL..."
+
           echo "$URL"
+
           echo
 
+
           SUCCESS=false
+
 
           for attempt in {1..10}; do
 
             echo "Attempt $attempt/10"
+
 
             STATUS=$(curl \
               -s \
@@ -1605,37 +1771,54 @@ jobs:
               --max-time 15 \
               "$URL")
 
+
             echo "Authorizer HTTP status: $STATUS"
+
 
             if [ "$STATUS" -eq 401 ]; then
 
               echo "Authorizer correctly rejected missing token."
 
+
               echo "Response:"
+
               cat /tmp/authorizer-response.txt || true
 
+
               SUCCESS=true
+
               break
+
 
             elif [ "$STATUS" -eq 403 ]; then
 
               echo "Received HTTP 403."
 
+
               echo "Response:"
+
               cat /tmp/authorizer-response.txt || true
 
+
               echo
+
               echo "The Function URL may still be propagating."
+
               echo "Waiting before retry..."
 
+
               sleep 10
+
 
             else
 
               echo "Unexpected Authorizer response: $STATUS"
 
+
               echo "Response:"
+
               cat /tmp/authorizer-response.txt || true
+
 
               exit 1
 
@@ -1647,31 +1830,46 @@ jobs:
           if [ "$SUCCESS" != "true" ]; then
 
             echo
+
             echo "======================================================"
+
             echo "ERROR: Authorizer Function URL remained at HTTP 403."
+
             echo "======================================================"
+
             echo
 
+
             echo "Checking Lambda Function URL configuration..."
+
             aws lambda get-function-url-config \
               --function-name cloudmart-dev-authorizer \
               --output json || true
 
+
             echo
+
             echo "Checking Authorizer Lambda resource policy..."
+
             aws lambda get-policy \
               --function-name cloudmart-dev-authorizer \
               --output json || true
 
+
             echo
+
             echo "Checking Authorizer Lambda configuration..."
+
             aws lambda get-function-configuration \
               --function-name cloudmart-dev-authorizer \
               --query '{FunctionName:FunctionName,State:State,LastUpdateStatus:LastUpdateStatus,Runtime:Runtime,Handler:Handler}' \
               --output table || true
 
+
             echo
+
             echo "Recent Authorizer Lambda logs:"
+
             aws logs describe-log-streams \
               --log-group-name /aws/lambda/cloudmart-dev-authorizer \
               --order-by LastEventTime \
@@ -1679,7 +1877,9 @@ jobs:
               --max-items 3 \
               --output table || true
 
+
             echo
+
             echo "Authorizer Function URL did not become reachable."
 
             exit 1
@@ -1697,15 +1897,21 @@ jobs:
 
           URL="${{ steps.outputs.outputs.product_url }}products"
 
+
           echo "Testing Product without token..."
+
           echo "$URL"
+
           echo
 
+
           SUCCESS=false
+
 
           for attempt in {1..10}; do
 
             echo "Attempt $attempt/10"
+
 
             STATUS=$(curl \
               -s \
@@ -1714,30 +1920,42 @@ jobs:
               --max-time 15 \
               "$URL")
 
+
             echo "Product HTTP status: $STATUS"
+
 
             if [ "$STATUS" -eq 401 ]; then
 
               echo "Product correctly rejected missing token."
 
+
               echo "Response:"
+
               cat /tmp/product-no-token-response.txt || true
 
+
               SUCCESS=true
+
               break
+
 
             elif [ "$STATUS" -eq 403 ]; then
 
               echo "Received HTTP 403."
+
               echo "Waiting before retry..."
 
+
               sleep 10
+
 
             else
 
               echo "Unexpected Product response: $STATUS"
 
+
               cat /tmp/product-no-token-response.txt || true
+
 
               exit 1
 
@@ -1749,21 +1967,31 @@ jobs:
           if [ "$SUCCESS" != "true" ]; then
 
             echo
+
             echo "======================================================"
+
             echo "ERROR: Product Function URL remained at HTTP 403."
+
             echo "======================================================"
+
             echo
 
+
             echo "Checking Product Function URL configuration..."
+
             aws lambda get-function-url-config \
               --function-name cloudmart-dev-product \
               --output json || true
 
+
             echo
+
             echo "Checking Product Lambda resource policy..."
+
             aws lambda get-policy \
               --function-name cloudmart-dev-product \
               --output json || true
+
 
             exit 1
 
@@ -1780,15 +2008,21 @@ jobs:
 
           URL="${{ steps.outputs.outputs.product_url }}products"
 
+
           echo "Testing Product with wrong token..."
+
           echo "$URL"
+
           echo
 
+
           SUCCESS=false
+
 
           for attempt in {1..10}; do
 
             echo "Attempt $attempt/10"
+
 
             STATUS=$(curl \
               -s \
@@ -1798,30 +2032,42 @@ jobs:
               -H "Authorization: Bearer wrong-token" \
               "$URL")
 
+
             echo "Product HTTP status: $STATUS"
+
 
             if [ "$STATUS" -eq 401 ]; then
 
               echo "Product correctly rejected wrong token."
 
+
               echo "Response:"
+
               cat /tmp/product-wrong-token-response.txt || true
 
+
               SUCCESS=true
+
               break
+
 
             elif [ "$STATUS" -eq 403 ]; then
 
               echo "Received HTTP 403."
+
               echo "Waiting before retry..."
 
+
               sleep 10
+
 
             else
 
               echo "Unexpected Product response: $STATUS"
 
+
               cat /tmp/product-wrong-token-response.txt || true
+
 
               exit 1
 
@@ -1833,21 +2079,31 @@ jobs:
           if [ "$SUCCESS" != "true" ]; then
 
             echo
+
             echo "======================================================"
+
             echo "ERROR: Product Function URL remained at HTTP 403."
+
             echo "======================================================"
+
             echo
 
+
             echo "Checking Product Function URL configuration..."
+
             aws lambda get-function-url-config \
               --function-name cloudmart-dev-product \
               --output json || true
 
+
             echo
+
             echo "Checking Product Lambda resource policy..."
+
             aws lambda get-policy \
               --function-name cloudmart-dev-product \
               --output json || true
+
 
             exit 1
 
@@ -1864,15 +2120,21 @@ jobs:
 
           URL="${{ steps.outputs.outputs.product_url }}products"
 
+
           echo "Testing Product with correct token..."
+
           echo "$URL"
+
           echo
 
+
           SUCCESS=false
+
 
           for attempt in {1..10}; do
 
             echo "Attempt $attempt/10"
+
 
             STATUS=$(curl \
               -s \
@@ -1882,30 +2144,42 @@ jobs:
               -H "Authorization: Bearer ${{ secrets.CLOUDMART_API_TOKEN }}" \
               "$URL")
 
+
             echo "Product HTTP status: $STATUS"
+
 
             if [ "$STATUS" -eq 200 ]; then
 
               echo "Product Function URL is healthy."
 
+
               echo "Response:"
+
               cat /tmp/product-correct-token-response.txt || true
 
+
               SUCCESS=true
+
               break
+
 
             elif [ "$STATUS" -eq 403 ]; then
 
               echo "Received HTTP 403."
+
               echo "Waiting before retry..."
 
+
               sleep 10
+
 
             else
 
               echo "Unexpected Product response: $STATUS"
 
+
               cat /tmp/product-correct-token-response.txt || true
+
 
               exit 1
 
@@ -1917,28 +2191,41 @@ jobs:
           if [ "$SUCCESS" != "true" ]; then
 
             echo
+
             echo "======================================================"
+
             echo "ERROR: Product Function URL remained at HTTP 403."
+
             echo "======================================================"
+
             echo
 
+
             echo "Checking Product Function URL configuration..."
+
             aws lambda get-function-url-config \
               --function-name cloudmart-dev-product \
               --output json || true
 
+
             echo
+
             echo "Checking Product Lambda resource policy..."
+
             aws lambda get-policy \
               --function-name cloudmart-dev-product \
               --output json || true
 
+
             echo
+
             echo "Checking Product Lambda configuration..."
+
             aws lambda get-function-configuration \
               --function-name cloudmart-dev-product \
               --query '{FunctionName:FunctionName,State:State,LastUpdateStatus:LastUpdateStatus,Runtime:Runtime,Handler:Handler}' \
               --output table || true
+
 
             exit 1
 
@@ -1967,7 +2254,9 @@ jobs:
       - uses: aws-actions/configure-aws-credentials@v4
 
         with:
+
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+
           aws-region: ${{ secrets.AWS_REGION }}
 
 
