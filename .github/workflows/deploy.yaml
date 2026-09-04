@@ -1480,7 +1480,7 @@ jobs:
               break
 
 
-            elif [ "$STATUS" = "FAILED" ]; then
+                        elif [ "$STATUS" = "FAILED" ]; then
 
               echo "Change set failed."
 
@@ -1533,7 +1533,6 @@ jobs:
                 exit 1
 
               fi
-
 
             else
 
