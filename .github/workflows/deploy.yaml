@@ -654,6 +654,24 @@ jobs:
 
 
       # ========================================================
+      # DEBUG DATABASE CLOUDFORMATION RESOURCES
+      # ========================================================
+
+      - name: Debug database stack resources
+
+        if: env.ready == 'true' || env.ready == 'nochange'
+
+        run: |
+
+          echo "CloudFormation SSM resources:"
+
+          aws cloudformation describe-stack-resources \
+            --stack-name "$STACK_NAME" \
+            --query 'StackResources[?ResourceType==`AWS::SSM::Parameter`].[LogicalResourceId,ResourceStatus,PhysicalResourceId]' \
+            --output table
+
+
+      # ========================================================
       # VERIFY DATABASE SSM PARAMETERS
       # ========================================================
 
