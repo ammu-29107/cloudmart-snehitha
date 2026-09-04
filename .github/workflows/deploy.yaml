@@ -656,6 +656,27 @@ jobs:
 
 
       # ========================================================
+      # STORE DATABASE PASSWORD IN SSM SECURESTRING
+      # ========================================================
+
+      - name: Store database password in SSM SecureString
+
+        if: env.ready == 'true'
+
+        run: |
+
+          echo "Storing database password in SSM SecureString..."
+
+          aws ssm put-parameter \
+            --name "/cloudmart/dev/database/password" \
+            --value "${{ secrets.DB_PASSWORD }}" \
+            --type SecureString \
+            --overwrite
+
+          echo "Database password stored in SSM SecureString."
+
+
+      # ========================================================
       # VERIFY DATABASE SSM PARAMETERS
       # ========================================================
 
