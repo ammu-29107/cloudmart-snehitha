@@ -644,13 +644,11 @@ jobs:
 
           echo "Storing database password in SSM SecureString..."
 
-
           aws ssm put-parameter \
             --name "/cloudmart/dev/database/password" \
             --value "${{ secrets.DB_PASSWORD }}" \
             --type SecureString \
             --overwrite
-
 
           echo "Database password stored in SSM SecureString."
 
@@ -667,54 +665,36 @@ jobs:
 
           echo "Checking database SSM parameters..."
 
-
-          # ----------------------------------------------------
-          # DATABASE HOST
-          # ----------------------------------------------------
-
+          echo
+          echo "Database host parameter:"
           aws ssm get-parameter \
             --name "/cloudmart/dev/database/host" \
             --query "Parameter.Name" \
             --output text
 
-
-          # ----------------------------------------------------
-          # DATABASE NAME
-          # ----------------------------------------------------
-
+          echo
+          echo "Database name parameter:"
           aws ssm get-parameter \
             --name "/cloudmart/dev/database/name" \
             --query "Parameter.Name" \
             --output text
 
-
-          # ----------------------------------------------------
-          # DATABASE USERNAME
-          # ----------------------------------------------------
-
+          echo
+          echo "Database username parameter:"
           aws ssm get-parameter \
             --name "/cloudmart/dev/database/username" \
             --query "Parameter.Name" \
             --output text
 
-
-          # ----------------------------------------------------
-          # DATABASE PASSWORD
-          #
-          # We intentionally DO NOT use --with-decryption here.
-          #
-          # We only need to verify that the SecureString exists.
-          # The password itself must not be printed into the
-          # GitHub Actions logs.
-          # ----------------------------------------------------
-
+          echo
+          echo "Database password parameter:"
           aws ssm get-parameter \
             --name "/cloudmart/dev/database/password" \
             --query "Parameter.{Name:Name,Type:Type}" \
             --output table
 
-
-          echo "Database SSM parameters verified successfully."
+          echo
+          echo "All database SSM parameters verified successfully."
 
 
   # ============================================================
