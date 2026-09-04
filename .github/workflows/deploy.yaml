@@ -638,7 +638,7 @@ jobs:
 
       - name: Store database password in SSM SecureString
 
-        if: env.ready == 'true'
+        if: env.ready == 'true' || env.ready == 'nochange'
 
         run: |
 
@@ -659,7 +659,7 @@ jobs:
 
       - name: Verify database SSM parameters
 
-        if: env.ready == 'true'
+        if: env.ready == 'true' || env.ready == 'nochange'
 
         run: |
 
