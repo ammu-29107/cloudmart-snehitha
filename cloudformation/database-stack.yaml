@@ -82,10 +82,8 @@ Resources:
 
       MasterUsername: cloudmart_admin
 
-
       MasterUserPassword:
         !Ref DbPassword
-
 
       MultiAZ: false
 
