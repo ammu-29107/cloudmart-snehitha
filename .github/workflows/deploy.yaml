@@ -2106,6 +2106,20 @@ jobs:
           fi
 
 
+      - name: Debug Product Function URL IAM
+        run: |
+          echo "=== Product Function URL ==="
+          aws lambda get-function-url-config \
+            --function-name cloudmart-dev-product
+
+          echo
+          echo "=== Product Lambda Resource Policy ==="
+          aws lambda get-policy \
+            --function-name cloudmart-dev-product \
+            --query 'Policy' \
+            --output text
+
+
       # ========================================================
       # PRODUCT TEST - WRONG TOKEN
       # ========================================================
