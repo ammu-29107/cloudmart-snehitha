@@ -15,8 +15,8 @@ def authorize(event):
     """
     Validate the Bearer token directly against SSM Parameter Store.
 
-    This is used internally by private Lambdas so they do not need
-    internet access to call the Authorizer Lambda Function URL.
+    Returns authorization status and a message so the calling Lambda
+    can provide a clear response to the client.
     """
 
     headers = event.get("headers") or {}
@@ -28,12 +28,23 @@ def authorize(event):
 
     # Missing Authorization header
     if not authorization:
-        return False
+        return {
+            "authorized": False,
+            "code": "MISSING_AUTHORIZATION",
+            "message": "Authorization header is required."
+        }
 
     # Expected format:
     # Authorization: Bearer <token>
     if not authorization.startswith("Bearer "):
-        return False
+        return {
+            "authorized": False,
+            "code": "INVALID_AUTHORIZATION_FORMAT",
+            "message": (
+                "Authorization header must use the "
+                "Bearer token format."
+            )
+        }
 
     provided_token = authorization.split(
         "Bearer ",
@@ -41,7 +52,11 @@ def authorize(event):
     )[1].strip()
 
     if not provided_token:
-        return False
+        return {
+            "authorized": False,
+            "code": "INVALID_TOKEN",
+            "message": "Authorization token cannot be empty."
+        }
 
     try:
 
@@ -54,7 +69,22 @@ def authorize(event):
             "Parameter"
         ]["Value"]
 
-        return provided_token == expected_token
+        if provided_token != expected_token:
+            return {
+                "authorized": False,
+                "code": "INVALID_TOKEN",
+                "message": "The provided authorization token is invalid."
+            }
+
+        return {
+            "authorized": True,
+            "code": "AUTHORIZED",
+            "message": "Authorization successful."
+        }
 
     except Exception:
-        return False
+        return {
+            "authorized": False,
+            "code": "AUTHORIZATION_ERROR",
+            "message": "Unable to validate authorization."
+        }

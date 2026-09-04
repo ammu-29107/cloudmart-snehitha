@@ -438,7 +438,7 @@ Resources:
         !GetAtt ProductLambda.Arn
 
       AuthType:
-        NONE
+        AWS_IAM
 
 
   # ==============================================================
@@ -458,7 +458,7 @@ Resources:
       Principal: '*'
 
       FunctionUrlAuthType:
-        NONE
+        AWS_IAM
 
 
   # ==============================================================

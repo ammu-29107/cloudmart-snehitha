@@ -79,6 +79,94 @@ def respond(status, body, request_id):
     }
 
 
+def validate_product_data(body, required_fields=True):
+    """Validate product request data."""
+
+    required = [
+        "product_name",
+        "category",
+        "price",
+        "stock_quantity"
+    ]
+
+    if required_fields:
+        missing = [
+            field
+            for field in required
+            if field not in body
+        ]
+
+        if missing:
+            return (
+                f"Missing required field(s): "
+                f"{', '.join(missing)}"
+            )
+
+    # ------------------------------------------------------------
+    # PRODUCT NAME
+    # ------------------------------------------------------------
+
+    if "product_name" in body:
+
+        product_name = body["product_name"]
+
+        if not isinstance(product_name, str):
+            return "Product name must be a string."
+
+        if not product_name.strip():
+            return "Product name cannot be empty."
+
+    # ------------------------------------------------------------
+    # CATEGORY
+    # ------------------------------------------------------------
+
+    if "category" in body:
+
+        category = body["category"]
+
+        if not isinstance(category, str):
+            return "Category must be a string."
+
+        if not category.strip():
+            return "Category cannot be empty."
+
+    # ------------------------------------------------------------
+    # PRICE
+    # ------------------------------------------------------------
+
+    if "price" in body:
+
+        price = body["price"]
+
+        if isinstance(price, bool) or not isinstance(
+            price,
+            (int, float)
+        ):
+            return "Price must be a valid number."
+
+        if price < 0:
+            return "Price cannot be negative."
+
+    # ------------------------------------------------------------
+    # STOCK
+    # ------------------------------------------------------------
+
+    if "stock_quantity" in body:
+
+        stock = body["stock_quantity"]
+
+        if isinstance(stock, bool) or not isinstance(
+            stock,
+            int
+        ):
+            return "Stock quantity must be a whole number."
+
+        if stock < 0:
+            return "Stock quantity cannot be negative."
+
+    return None
+
+
 def handler(event, context):
 
     request_id = str(uuid.uuid4())[:8]
@@ -109,14 +197,16 @@ def handler(event, context):
     # AUTHORIZATION
     # ============================================================
 
-    if not authorize(event):
+    auth_result = authorize(event)
+
+    if not auth_result["authorized"]:
         return respond(
             401,
             {
                 "success": False,
                 "error": {
-                    "code": "UNAUTHORIZED",
-                    "message": "Missing or invalid authorization token"
+                    "code": auth_result["code"],
+                    "message": auth_result["message"]
                 }
             },
             request_id
@@ -164,7 +254,7 @@ def handler(event, context):
                 "success": False,
                 "error": {
                     "code": "NOT_FOUND",
-                    "message": "No matching route"
+                    "message": "No matching route."
                 }
             },
             request_id
@@ -185,7 +275,7 @@ def handler(event, context):
                 "success": False,
                 "error": {
                     "code": "INTERNAL_ERROR",
-                    "message": "Unexpected error"
+                    "message": "Unexpected error."
                 }
             },
             request_id
@@ -252,32 +342,33 @@ def publish_low_stock_alert(
 
 def create_product(event, request_id):
 
-    body = json.loads(
-        event.get("body") or "{}"
-    )
-
-    required = [
-        "product_name",
-        "category_id",
-        "price",
-        "stock_quantity"
-    ]
-
-    missing = [
-        field
-        for field in required
-        if field not in body
-    ]
-
-    if missing:
-
+    try:
+        body = json.loads(
+            event.get("body") or "{}"
+        )
+    except json.JSONDecodeError:
         return respond(
             400,
             {
                 "success": False,
                 "error": {
-                    "code": "MISSING_FIELDS",
-                    "message": f"Missing: {missing}"
+                    "code": "INVALID_JSON",
+                    "message": "Request body must contain valid JSON."
+                }
+            },
+            request_id
+        )
+
+    validation_error = validate_product_data(body)
+
+    if validation_error:
+        return respond(
+            400,
+            {
+                "success": False,
+                "error": {
+                    "code": "VALIDATION_ERROR",
+                    "message": validation_error
                 }
             },
             request_id
@@ -293,24 +384,25 @@ def create_product(event, request_id):
                 """
                 SELECT category_id
                 FROM categories
-                WHERE category_id=%s
+                WHERE category_name=%s
                 AND status='ACTIVE'
                 """,
-                (body["category_id"],)
+                (body["category"].strip(),)
             )
 
-            if not cur.fetchone():
+            category = cur.fetchone()
+
+            if not category:
 
                 return respond(
-                    400,
+                    404,
                     {
                         "success": False,
                         "error": {
-                            "code": "INVALID_CATEGORY",
+                            "code": "CATEGORY_NOT_FOUND",
                             "message": (
-                                f"category_id "
-                                f"{body['category_id']} "
-                                f"does not exist"
+                                f"Category '{body['category'].strip()}' "
+                                "was not found."
                             )
                         }
                     },
@@ -331,12 +423,12 @@ def create_product(event, request_id):
                 VALUES (%s,%s,%s,%s,%s,%s)
                 """,
                 (
-                    body["category_id"],
-                    body["product_name"],
+                    category["category_id"],
+                    body["product_name"].strip(),
                     body.get("description"),
                     body["price"],
                     body["stock_quantity"],
-                    body.get("status", "ACTIVE")
+                    "ACTIVE"
                 ),
             )
 
@@ -368,6 +460,7 @@ def create_product(event, request_id):
         201,
         {
             "success": True,
+            "message": "Product created successfully.",
             "data": {
                 "product_id": product_id,
                 **body
@@ -405,9 +498,20 @@ def get_product(event, request_id):
 
             cur.execute(
                 """
-                SELECT *
-                FROM products
-                WHERE product_id=%s
+                SELECT
+                    p.product_id,
+                    p.product_name,
+                    c.category_name AS category,
+                    p.description,
+                    p.price,
+                    p.stock_quantity,
+                    p.status,
+                    p.created_at,
+                    p.updated_at
+                FROM products p
+                JOIN categories c
+                    ON p.category_id = c.category_id
+                WHERE p.product_id=%s
                 """,
                 (product_id,)
             )
@@ -425,11 +529,7 @@ def get_product(event, request_id):
                 "success": False,
                 "error": {
                     "code": "PRODUCT_NOT_FOUND",
-                    "message": (
-                        f"product_id "
-                        f"{product_id} "
-                        f"does not exist"
-                    )
+                    "message": "Product not found."
                 }
             },
             request_id
@@ -439,6 +539,7 @@ def get_product(event, request_id):
         200,
         {
             "success": True,
+            "message": "Product retrieved successfully.",
             "data": product
         },
         request_id
@@ -452,8 +553,8 @@ def list_products(event, request_id):
         or {}
     )
 
-    category_id = query_parameters.get(
-        "category_id"
+    category = query_parameters.get(
+        "category"
     )
 
     status = query_parameters.get(
@@ -462,18 +563,29 @@ def list_products(event, request_id):
     )
 
     query = """
-        SELECT *
-        FROM products
-        WHERE status=%s
+        SELECT
+            p.product_id,
+            p.product_name,
+            c.category_name AS category,
+            p.description,
+            p.price,
+            p.stock_quantity,
+            p.status,
+            p.created_at,
+            p.updated_at
+        FROM products p
+        JOIN categories c
+            ON p.category_id = c.category_id
+        WHERE p.status=%s
     """
 
     params = [status]
 
-    if category_id:
+    if category:
 
-        query += " AND category_id=%s"
+        query += " AND c.category_name=%s"
 
-        params.append(category_id)
+        params.append(category.strip())
 
     conn = get_db_connection()
 
@@ -495,6 +607,11 @@ def list_products(event, request_id):
         200,
         {
             "success": True,
+            "message": (
+                "Products retrieved successfully."
+                if products
+                else "No products found."
+            ),
             "data": products
         },
         request_id
@@ -521,9 +638,40 @@ def update_product(event, request_id):
 
         product_id = path.rstrip("/").split("/")[-1]
 
-    body = json.loads(
-        event.get("body") or "{}"
+    try:
+        body = json.loads(
+            event.get("body") or "{}"
+        )
+    except json.JSONDecodeError:
+        return respond(
+            400,
+            {
+                "success": False,
+                "error": {
+                    "code": "INVALID_JSON",
+                    "message": "Request body must contain valid JSON."
+                }
+            },
+            request_id
+        )
+
+    validation_error = validate_product_data(
+        body,
+        required_fields=False
     )
+
+    if validation_error:
+        return respond(
+            400,
+            {
+                "success": False,
+                "error": {
+                    "code": "VALIDATION_ERROR",
+                    "message": validation_error
+                }
+            },
+            request_id
+        )
 
     conn = get_db_connection()
 
@@ -550,15 +698,48 @@ def update_product(event, request_id):
                         "success": False,
                         "error": {
                             "code": "PRODUCT_NOT_FOUND",
-                            "message": (
-                                f"product_id "
-                                f"{product_id} "
-                                f"does not exist"
-                            )
+                            "message": "Product not found."
                         }
                     },
                     request_id
                 )
+
+            if "category" in body:
+
+                cur.execute(
+                    """
+                    SELECT category_id
+                    FROM categories
+                    WHERE category_name=%s
+                    AND status='ACTIVE'
+                    """,
+                    (body["category"].strip(),)
+                )
+
+                category = cur.fetchone()
+
+                if not category:
+
+                    return respond(
+                        404,
+                        {
+                            "success": False,
+                            "error": {
+                                "code": "CATEGORY_NOT_FOUND",
+                                "message": (
+                                    f"Category '{body['category'].strip()}' "
+                                    "was not found."
+                                )
+                            }
+                        },
+                        request_id
+                    )
+
+                category_id = category["category_id"]
+
+            else:
+
+                category_id = existing["category_id"]
 
             new_stock = body.get(
                 "stock_quantity",
@@ -593,19 +774,13 @@ def update_product(event, request_id):
                         "description",
                         existing["description"]
                     ),
-                    body.get(
-                        "category_id",
-                        existing["category_id"]
-                    ),
+                    category_id,
                     body.get(
                         "price",
                         existing["price"]
                     ),
                     new_stock,
-                    body.get(
-                        "status",
-                        new_status
-                    ),
+                    new_status,
                     product_id
                 ),
             )
@@ -637,6 +812,7 @@ def update_product(event, request_id):
         200,
         {
             "success": True,
+            "message": "Product updated successfully.",
             "data": {
                 "product_id": product_id,
                 "stock_quantity": new_stock,
@@ -692,11 +868,7 @@ def deactivate_product(event, request_id):
                         "success": False,
                         "error": {
                             "code": "PRODUCT_NOT_FOUND",
-                            "message": (
-                                f"product_id "
-                                f"{product_id} "
-                                f"does not exist"
-                            )
+                            "message": "Product not found."
                         }
                     },
                     request_id
@@ -710,11 +882,7 @@ def deactivate_product(event, request_id):
                         "success": False,
                         "error": {
                             "code": "PRODUCT_ALREADY_INACTIVE",
-                            "message": (
-                                f"product_id "
-                                f"{product_id} "
-                                f"is already INACTIVE"
-                            )
+                            "message": "Product is already inactive."
                         }
                     },
                     request_id
@@ -742,8 +910,11 @@ def deactivate_product(event, request_id):
         product_id=product_id
     )
 
-    return {
-        "statusCode": 204,
-        "headers": {},
-        "body": ""
-    }
+    return respond(
+        200,
+        {
+            "success": True,
+            "message": "Product deactivated successfully."
+        },
+        request_id
+    )

@@ -2,10 +2,9 @@ AWSTemplateFormatVersion: '2010-09-09'
 
 Description: >
   CloudMart database stack — RDS MySQL, single-AZ, in private subnets.
-  The database password is generated inside AWS by a Lambda-backed
-  CloudFormation custom resource and stored as an SSM Parameter Store
-  SecureString. The generated password is passed to RDS by the custom
-  resource. No Secrets Manager database secret is created.
+  The database password is supplied securely by GitHub Actions using
+  the DB_PASSWORD GitHub Secret and stored in SSM Parameter Store
+  as a SecureString. No Secrets Manager database secret is created.
 
 
 Parameters:
@@ -19,6 +18,11 @@ Parameters:
   DbInstanceClass:
     Type: String
     Default: db.t3.micro
+
+  DbPassword:
+    Type: String
+    NoEcho: true
+    MinLength: 12
 
 
 Resources:
@@ -49,396 +53,6 @@ Resources:
 
 
   # ============================================================
-  # PASSWORD GENERATOR IAM ROLE
-  # ============================================================
-
-  PasswordGeneratorRole:
-    Type: AWS::IAM::Role
-
-    Properties:
-
-      AssumeRolePolicyDocument:
-
-        Version: '2012-10-17'
-
-        Statement:
-
-          - Effect: Allow
-
-            Principal:
-              Service:
-                - lambda.amazonaws.com
-
-            Action:
-              - sts:AssumeRole
-
-
-      Policies:
-
-        - PolicyName: GenerateDatabasePassword
-
-          PolicyDocument:
-
-            Version: '2012-10-17'
-
-            Statement:
-
-              # ------------------------------------------------
-              # CloudWatch Logs
-              # ------------------------------------------------
-
-              - Effect: Allow
-
-                Action:
-                  - logs:CreateLogGroup
-                  - logs:CreateLogStream
-                  - logs:PutLogEvents
-
-                Resource: "*"
-
-
-              # ------------------------------------------------
-              # SSM Parameter Store
-              # ------------------------------------------------
-
-              - Effect: Allow
-
-                Action:
-                  - ssm:GetParameter
-                  - ssm:PutParameter
-
-                Resource: !Sub
-                  - arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudmart/${Environment}/database/password
-                  - Environment: !Ref Environment
-
-
-  # ============================================================
-  # PASSWORD GENERATOR LAMBDA
-  # ============================================================
-
-  PasswordGeneratorFunction:
-    Type: AWS::Lambda::Function
-
-    Properties:
-
-      FunctionName: !Sub
-        - cloudmart-${Environment}-password-generator
-        - Environment: !Ref Environment
-
-      Runtime: python3.12
-
-      Handler: index.lambda_handler
-
-      Role: !GetAtt PasswordGeneratorRole.Arn
-
-      Timeout: 60
-
-      Code:
-
-        ZipFile: |
-
-          import json
-          import secrets
-          import string
-          import urllib.request
-          import boto3
-
-
-          ssm = boto3.client("ssm")
-
-
-          # ======================================================
-          # SEND CLOUDFORMATION CUSTOM RESOURCE RESPONSE
-          # ======================================================
-
-          def send_response(
-              event,
-              context,
-              status,
-              data=None,
-              reason=None
-          ):
-
-              response_body = {
-                  "Status": status,
-
-                  "Reason": reason or "See CloudWatch Logs",
-
-                  "PhysicalResourceId": event.get(
-                      "PhysicalResourceId",
-                      context.log_stream_name
-                  ),
-
-                  "StackId": event["StackId"],
-
-                  "RequestId": event["RequestId"],
-
-                  "LogicalResourceId": event["LogicalResourceId"],
-
-                  "Data": data or {}
-              }
-
-
-              body = json.dumps(
-                  response_body
-              ).encode("utf-8")
-
-
-              request = urllib.request.Request(
-                  event["ResponseURL"],
-                  data=body,
-                  method="PUT"
-              )
-
-
-              request.add_header(
-                  "Content-Type",
-                  ""
-              )
-
-              request.add_header(
-                  "Content-Length",
-                  str(len(body))
-              )
-
-
-              urllib.request.urlopen(request)
-
-
-          # ======================================================
-          # GENERATE RANDOM DATABASE PASSWORD
-          # ======================================================
-
-          def generate_password():
-
-              alphabet = (
-                  string.ascii_letters
-                  + string.digits
-                  + "!#$%^&*_-+="
-              )
-
-
-              return "".join(
-                  secrets.choice(alphabet)
-                  for _ in range(32)
-              )
-
-
-          # ======================================================
-          # LAMBDA HANDLER
-          # ======================================================
-
-          def lambda_handler(event, context):
-
-              request_type = event["RequestType"]
-
-              environment = (
-                  event["ResourceProperties"]["Environment"]
-              )
-
-
-              parameter_name = (
-                  f"/cloudmart/{environment}/database/password"
-              )
-
-
-              print(
-                  json.dumps(
-                      {
-                          "RequestType": request_type,
-                          "LogicalResourceId":
-                              event["LogicalResourceId"]
-                      }
-                  )
-              )
-
-
-              try:
-
-                  # ==================================================
-                  # CREATE
-                  # ==================================================
-
-                  if request_type == "Create":
-
-                      try:
-
-                          existing = ssm.get_parameter(
-
-                              Name=parameter_name,
-
-                              WithDecryption=True
-                          )
-
-
-                          password = (
-                              existing["Parameter"]["Value"]
-                          )
-
-
-                          print(
-                              "Existing database password "
-                              "found in SSM. Reusing it."
-                          )
-
-
-                      except ssm.exceptions.ParameterNotFound:
-
-                          password = generate_password()
-
-
-                          ssm.put_parameter(
-
-                              Name=parameter_name,
-
-                              Description=(
-                                  f"CloudMart {environment} "
-                                  "RDS MySQL master password"
-                              ),
-
-                              Value=password,
-
-                              Type="SecureString",
-
-                              Overwrite=False
-                          )
-
-
-                          print(
-                              "Generated new database password "
-                              "and stored it in SSM."
-                          )
-
-
-                  # ==================================================
-                  # UPDATE
-                  # ==================================================
-
-                  elif request_type == "Update":
-
-                      existing = ssm.get_parameter(
-
-                          Name=parameter_name,
-
-                          WithDecryption=True
-                      )
-
-
-                      password = (
-                          existing["Parameter"]["Value"]
-                      )
-
-
-                      print(
-                          "Stack update detected. "
-                          "Existing database password retained."
-                      )
-
-
-                  # ==================================================
-                  # DELETE
-                  # ==================================================
-
-                  elif request_type == "Delete":
-
-                      # ----------------------------------------------
-                      # IMPORTANT:
-                      #
-                      # Do not delete the password from SSM when
-                      # the CloudFormation stack is deleted.
-                      #
-                      # This allows the password to survive a stack
-                      # recreation and prevents accidental loss.
-                      # ----------------------------------------------
-
-                      print(
-                          "Stack deletion detected. "
-                          "Leaving database password in SSM."
-                      )
-
-
-                      send_response(
-
-                          event,
-
-                          context,
-
-                          "SUCCESS",
-
-                          {
-                              "ParameterName":
-                                  parameter_name
-                          }
-                      )
-
-
-                      return
-
-
-                  # ==================================================
-                  # RETURN PASSWORD TO CLOUDFORMATION
-                  # ==================================================
-
-                  send_response(
-
-                      event,
-
-                      context,
-
-                      "SUCCESS",
-
-                      {
-                          "ParameterName":
-                              parameter_name,
-
-                          "Password":
-                              password
-                      }
-                  )
-
-
-              except Exception as exc:
-
-                  print(
-                      f"Password generation failed: {exc}"
-                  )
-
-
-                  send_response(
-
-                      event,
-
-                      context,
-
-                      "FAILED",
-
-                      reason=str(exc)
-                  )
-
-
-                  raise
-
-
-  # ============================================================
-  # DATABASE PASSWORD CUSTOM RESOURCE
-  # ============================================================
-
-  DatabasePassword:
-    Type: Custom::DatabasePassword
-
-    DependsOn:
-      - PasswordGeneratorFunction
-
-    Properties:
-
-      ServiceToken:
-        !GetAtt PasswordGeneratorFunction.Arn
-
-      Environment:
-        !Ref Environment
-
-
-  # ============================================================
   # RDS MYSQL
   # ============================================================
 
@@ -446,9 +60,6 @@ Resources:
     Type: AWS::RDS::DBInstance
 
     DeletionPolicy: Snapshot
-
-    DependsOn:
-      - DatabasePassword
 
     Properties:
 
@@ -472,20 +83,8 @@ Resources:
       MasterUsername: cloudmart_admin
 
 
-      # ==========================================================
-      # DATABASE PASSWORD
-      #
-      # The custom resource:
-      #
-      # 1. Generates the password inside AWS.
-      # 2. Stores it in SSM SecureString.
-      # 3. Returns the password to CloudFormation.
-      #
-      # RDS receives the password from the custom resource.
-      # ==========================================================
-
       MasterUserPassword:
-        !GetAtt DatabasePassword.Password
+        !Ref DbPassword
 
 
       MultiAZ: false
@@ -573,6 +172,28 @@ Resources:
         - Environment: !Ref Environment
 
 
+  # ============================================================
+  # SSM DATABASE PASSWORD
+  # ============================================================
+
+  DatabasePasswordParameter:
+    Type: AWS::SSM::Parameter
+
+    Properties:
+
+      Name: !Sub
+        - /cloudmart/${Environment}/database/password
+        - Environment: !Ref Environment
+
+      Type: SecureString
+
+      Value: !Ref DbPassword
+
+      Description: !Sub
+        - CloudMart ${Environment} RDS master password
+        - Environment: !Ref Environment
+
+
 # ==============================================================
 # OUTPUTS
 # ==============================================================
@@ -622,7 +243,7 @@ Outputs:
 
     Description: >
       SSM Parameter Store SecureString containing the
-      generated RDS master password.
+      RDS master password.
 
     Value: !Sub
       - /cloudmart/${Environment}/database/password
