@@ -198,8 +198,19 @@ def handler(event, context):
     # APPLICATION AUTHORIZATION
     # ============================================================
 
+    log_json(
+        request_id=request_id,
+        event="authorization_check_started"
+    )
 
     auth_result = authorize(event)
+
+    log_json(
+        request_id=request_id,
+        event="authorization_result",
+        authorized=auth_result.get("authorized"),
+        code=auth_result.get("code")
+    )
 
     if not auth_result["authorized"]:
         return respond(
