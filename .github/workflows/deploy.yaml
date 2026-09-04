@@ -493,16 +493,53 @@ jobs:
 
             elif [ "$STATUS" = "FAILED" ]; then
 
+              echo "Change set failed."
+
+              echo "Reason: $REASON"
+
+              echo
+              echo "======================================================"
+              echo "FULL CHANGE SET DETAILS"
+              echo "======================================================"
+
+              aws cloudformation describe-change-set \
+                --stack-name "$STACK_NAME" \
+                --change-set-name "$CHANGESET_NAME" \
+                --output json || true
+
+              echo
+              echo "======================================================"
+              echo "CLOUDFORMATION DESCRIBE EVENTS"
+              echo "======================================================"
+
+              aws cloudformation describe-events \
+                --stack-name "$STACK_NAME" \
+                --change-set-name "$CHANGESET_NAME" \
+                --region "${{ secrets.AWS_REGION }}" \
+                --output json || true
+
+              echo
+              echo "======================================================"
+              echo "RECENT STACK EVENTS"
+              echo "======================================================"
+
+              aws cloudformation describe-stack-events \
+                --stack-name "$STACK_NAME" \
+                --query 'StackEvents[:20].{Time:Timestamp,Status:ResourceStatus,Resource:LogicalResourceId,Reason:ResourceStatusReason}' \
+                --output table || true
+
+              echo
+
               if echo "$REASON" |
                 grep -qi "didn't contain changes\|No updates"; then
+
+                echo "No changes to deploy."
 
                 echo "ready=nochange" >> "$GITHUB_ENV"
 
                 break
 
               else
-
-                echo "Change set failed: $REASON"
 
                 exit 1
 
