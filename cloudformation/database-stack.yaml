@@ -170,27 +170,6 @@ Resources:
         - Environment: !Ref Environment
 
 
-  # ============================================================
-  # SSM DATABASE PASSWORD
-  # ============================================================
-
-  DatabasePasswordParameter:
-    Type: AWS::SSM::Parameter
-
-    Properties:
-
-      Name: !Sub
-        - /cloudmart/${Environment}/database/password
-        - Environment: !Ref Environment
-
-      Type: SecureString
-
-      Value: !Ref DbPassword
-
-      Description: !Sub
-        - CloudMart ${Environment} RDS master password
-        - Environment: !Ref Environment
-
 
 # ==============================================================
 # OUTPUTS
