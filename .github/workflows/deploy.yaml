@@ -184,6 +184,10 @@ jobs:
             --capabilities CAPABILITY_NAMED_IAM
 
 
+      # ========================================================
+      # WAIT FOR CHANGE SET
+      # ========================================================
+
       - name: Wait for change set
 
         run: |
@@ -206,6 +210,8 @@ jobs:
 
             echo "Attempt $i/20 - Status: $STATUS"
 
+            echo "Reason: $REASON"
+
 
             if [ "$STATUS" = "CREATE_COMPLETE" ]; then
 
@@ -216,16 +222,49 @@ jobs:
 
             elif [ "$STATUS" = "FAILED" ]; then
 
+              echo
+
+              echo "======================================================"
+
+              echo "CHANGE SET FAILED"
+
+              echo "======================================================"
+
+              echo "Status: $STATUS"
+
+              echo "Reason: $REASON"
+
+              echo
+
+
+              echo "Full change set details:"
+
+              aws cloudformation describe-change-set \
+                --stack-name "$STACK_NAME" \
+                --change-set-name "$CHANGESET_NAME" \
+                --output json || true
+
+
+              echo
+
+              echo "CloudFormation events:"
+
+              aws cloudformation describe-stack-events \
+                --stack-name "$STACK_NAME" \
+                --query 'StackEvents[:20].{Time:Timestamp,Status:ResourceStatus,Resource:LogicalResourceId,Reason:ResourceStatusReason}' \
+                --output table || true
+
+
               if echo "$REASON" |
                 grep -qi "didn't contain changes\|No updates"; then
+
+                echo "No changes to deploy."
 
                 echo "ready=nochange" >> "$GITHUB_ENV"
 
                 break
 
               else
-
-                echo "Change set failed: $REASON"
 
                 exit 1
 
@@ -1447,6 +1486,38 @@ jobs:
 
               echo "Reason: $REASON"
 
+              echo
+              echo "======================================================"
+              echo "FULL CHANGE SET DETAILS"
+              echo "======================================================"
+
+              aws cloudformation describe-change-set \
+                --stack-name "$STACK_NAME" \
+                --change-set-name "$CHANGESET_NAME" \
+                --output json || true
+
+              echo
+              echo "======================================================"
+              echo "CLOUDFORMATION DESCRIBE EVENTS"
+              echo "======================================================"
+
+              aws cloudformation describe-events \
+                --stack-name "$STACK_NAME" \
+                --change-set-name "$CHANGESET_NAME" \
+                --region "${{ secrets.AWS_REGION }}" \
+                --output json || true
+
+              echo
+              echo "======================================================"
+              echo "RECENT STACK EVENTS"
+              echo "======================================================"
+
+              aws cloudformation describe-stack-events \
+                --stack-name "$STACK_NAME" \
+                --query 'StackEvents[:20].{Time:Timestamp,Status:ResourceStatus,Resource:LogicalResourceId,Reason:ResourceStatusReason}' \
+                --output table || true
+
+              echo
 
               if echo "$REASON" |
                 grep -qi "didn't contain changes\|No updates"; then
@@ -1888,7 +1959,7 @@ jobs:
           fi
 
 
-      # ========================================================
+            # ========================================================
       # PRODUCT TEST - NO TOKEN
       # ========================================================
 
@@ -1898,8 +1969,7 @@ jobs:
 
           URL="${{ steps.outputs.outputs.product_url }}products"
 
-
-          echo "Testing Product without token..."
+          echo "Testing Product without application token..."
 
           echo "$URL"
 
@@ -1919,6 +1989,9 @@ jobs:
               -o /tmp/product-no-token-response.txt \
               -w "%{http_code}" \
               --max-time 15 \
+              --aws-sigv4 "aws:amz:${{ secrets.AWS_REGION }}:lambda" \
+              --user "$AWS_ACCESS_KEY_ID:$AWS_SECRET_ACCESS_KEY" \
+              -H "x-amz-security-token: $AWS_SESSION_TOKEN" \
               "$URL")
 
 
@@ -1927,7 +2000,7 @@ jobs:
 
             if [ "$STATUS" -eq 401 ]; then
 
-              echo "Product correctly rejected missing token."
+              echo "Product correctly rejected missing application token."
 
 
               echo "Response:"
@@ -1944,8 +2017,9 @@ jobs:
 
               echo "Received HTTP 403."
 
-              echo "Waiting before retry..."
+              echo "Checking IAM Function URL access..."
 
+              cat /tmp/product-no-token-response.txt || true
 
               sleep 10
 
@@ -1954,9 +2028,7 @@ jobs:
 
               echo "Unexpected Product response: $STATUS"
 
-
               cat /tmp/product-no-token-response.txt || true
-
 
               exit 1
 
@@ -1969,30 +2041,7 @@ jobs:
 
             echo
 
-            echo "======================================================"
-
-            echo "ERROR: Product Function URL remained at HTTP 403."
-
-            echo "======================================================"
-
-            echo
-
-
-            echo "Checking Product Function URL configuration..."
-
-            aws lambda get-function-url-config \
-              --function-name cloudmart-dev-product \
-              --output json || true
-
-
-            echo
-
-            echo "Checking Product Lambda resource policy..."
-
-            aws lambda get-policy \
-              --function-name cloudmart-dev-product \
-              --output json || true
-
+            echo "ERROR: Product did not return 401 for missing application token."
 
             exit 1
 
@@ -2010,7 +2059,7 @@ jobs:
           URL="${{ steps.outputs.outputs.product_url }}products"
 
 
-          echo "Testing Product with wrong token..."
+          echo "Testing Product with wrong application token..."
 
           echo "$URL"
 
@@ -2030,6 +2079,9 @@ jobs:
               -o /tmp/product-wrong-token-response.txt \
               -w "%{http_code}" \
               --max-time 15 \
+              --aws-sigv4 "aws:amz:${{ secrets.AWS_REGION }}:lambda" \
+              --user "$AWS_ACCESS_KEY_ID:$AWS_SECRET_ACCESS_KEY" \
+              -H "x-amz-security-token: $AWS_SESSION_TOKEN" \
               -H "Authorization: Bearer wrong-token" \
               "$URL")
 
@@ -2039,7 +2091,7 @@ jobs:
 
             if [ "$STATUS" -eq 401 ]; then
 
-              echo "Product correctly rejected wrong token."
+              echo "Product correctly rejected wrong application token."
 
 
               echo "Response:"
@@ -2056,8 +2108,9 @@ jobs:
 
               echo "Received HTTP 403."
 
-              echo "Waiting before retry..."
+              echo "Checking IAM Function URL access..."
 
+              cat /tmp/product-wrong-token-response.txt || true
 
               sleep 10
 
@@ -2066,9 +2119,7 @@ jobs:
 
               echo "Unexpected Product response: $STATUS"
 
-
               cat /tmp/product-wrong-token-response.txt || true
-
 
               exit 1
 
@@ -2081,30 +2132,7 @@ jobs:
 
             echo
 
-            echo "======================================================"
-
-            echo "ERROR: Product Function URL remained at HTTP 403."
-
-            echo "======================================================"
-
-            echo
-
-
-            echo "Checking Product Function URL configuration..."
-
-            aws lambda get-function-url-config \
-              --function-name cloudmart-dev-product \
-              --output json || true
-
-
-            echo
-
-            echo "Checking Product Lambda resource policy..."
-
-            aws lambda get-policy \
-              --function-name cloudmart-dev-product \
-              --output json || true
-
+            echo "ERROR: Product did not return 401 for wrong application token."
 
             exit 1
 
@@ -2122,7 +2150,7 @@ jobs:
           URL="${{ steps.outputs.outputs.product_url }}products"
 
 
-          echo "Testing Product with correct token..."
+          echo "Testing Product with correct application token..."
 
           echo "$URL"
 
@@ -2142,6 +2170,9 @@ jobs:
               -o /tmp/product-correct-token-response.txt \
               -w "%{http_code}" \
               --max-time 15 \
+              --aws-sigv4 "aws:amz:${{ secrets.AWS_REGION }}:lambda" \
+              --user "$AWS_ACCESS_KEY_ID:$AWS_SECRET_ACCESS_KEY" \
+              -H "x-amz-security-token: $AWS_SESSION_TOKEN" \
               -H "Authorization: Bearer ${{ secrets.CLOUDMART_API_TOKEN }}" \
               "$URL")
 
@@ -2168,8 +2199,9 @@ jobs:
 
               echo "Received HTTP 403."
 
-              echo "Waiting before retry..."
+              echo "Checking IAM Function URL access..."
 
+              cat /tmp/product-correct-token-response.txt || true
 
               sleep 10
 
@@ -2178,9 +2210,7 @@ jobs:
 
               echo "Unexpected Product response: $STATUS"
 
-
               cat /tmp/product-correct-token-response.txt || true
-
 
               exit 1
 
@@ -2193,40 +2223,7 @@ jobs:
 
             echo
 
-            echo "======================================================"
-
-            echo "ERROR: Product Function URL remained at HTTP 403."
-
-            echo "======================================================"
-
-            echo
-
-
-            echo "Checking Product Function URL configuration..."
-
-            aws lambda get-function-url-config \
-              --function-name cloudmart-dev-product \
-              --output json || true
-
-
-            echo
-
-            echo "Checking Product Lambda resource policy..."
-
-            aws lambda get-policy \
-              --function-name cloudmart-dev-product \
-              --output json || true
-
-
-            echo
-
-            echo "Checking Product Lambda configuration..."
-
-            aws lambda get-function-configuration \
-              --function-name cloudmart-dev-product \
-              --query '{FunctionName:FunctionName,State:State,LastUpdateStatus:LastUpdateStatus,Runtime:Runtime,Handler:Handler}' \
-              --output table || true
-
+            echo "ERROR: Product Function URL did not return 200."
 
             exit 1
 
