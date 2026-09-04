@@ -193,9 +193,11 @@ def handler(event, context):
         path=path
     )
 
+
     # ============================================================
-    # AUTHORIZATION
+    # APPLICATION AUTHORIZATION
     # ============================================================
+
 
     auth_result = authorize(event)
 
@@ -211,6 +213,7 @@ def handler(event, context):
             },
             request_id
         )
+
 
     # ============================================================
     # BUSINESS ROUTING
