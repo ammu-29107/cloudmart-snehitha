@@ -70,11 +70,9 @@ def respond(status, body, request_id):
             "Content-Type": "application/json"
         },
         "body": json.dumps(
-            {
-                **body,
-                "request_id": request_id
-            },
-            default=str
+            body,
+            default=str,
+            indent=2
         )
     }
 
@@ -102,12 +100,8 @@ def validate_product_data(body, required_fields=True):
                 f"{', '.join(missing)}"
             )
 
-    # ------------------------------------------------------------
     # PRODUCT NAME
-    # ------------------------------------------------------------
-
     if "product_name" in body:
-
         product_name = body["product_name"]
 
         if not isinstance(product_name, str):
@@ -116,12 +110,8 @@ def validate_product_data(body, required_fields=True):
         if not product_name.strip():
             return "Product name cannot be empty."
 
-    # ------------------------------------------------------------
     # CATEGORY
-    # ------------------------------------------------------------
-
     if "category" in body:
-
         category = body["category"]
 
         if not isinstance(category, str):
@@ -130,12 +120,8 @@ def validate_product_data(body, required_fields=True):
         if not category.strip():
             return "Category cannot be empty."
 
-    # ------------------------------------------------------------
     # PRICE
-    # ------------------------------------------------------------
-
     if "price" in body:
-
         price = body["price"]
 
         if isinstance(price, bool) or not isinstance(
@@ -147,12 +133,8 @@ def validate_product_data(body, required_fields=True):
         if price < 0:
             return "Price cannot be negative."
 
-    # ------------------------------------------------------------
     # STOCK
-    # ------------------------------------------------------------
-
     if "stock_quantity" in body:
-
         stock = body["stock_quantity"]
 
         if isinstance(stock, bool) or not isinstance(
@@ -172,7 +154,6 @@ def handler(event, context):
     request_id = str(uuid.uuid4())[:8]
 
     request_context = event.get("requestContext") or {}
-
     http_context = request_context.get("http") or {}
 
     method = (
@@ -193,11 +174,7 @@ def handler(event, context):
         path=path
     )
 
-
-    # ============================================================
     # APPLICATION AUTHORIZATION
-    # ============================================================
-
     log_json(
         request_id=request_id,
         event="authorization_check_started"
@@ -217,59 +194,34 @@ def handler(event, context):
             401,
             {
                 "success": False,
-                "error": {
-                    "code": auth_result["code"],
-                    "message": auth_result["message"]
-                }
+                "message": auth_result["message"]
             },
             request_id
         )
 
-
-    # ============================================================
     # BUSINESS ROUTING
-    # ============================================================
-
     try:
 
         if method == "POST" and path == "/products":
-            return create_product(
-                event,
-                request_id
-            )
+            return create_product(event, request_id)
 
         if method == "GET" and path.startswith("/products/"):
-            return get_product(
-                event,
-                request_id
-            )
+            return get_product(event, request_id)
 
         if method == "GET" and path == "/products":
-            return list_products(
-                event,
-                request_id
-            )
+            return list_products(event, request_id)
 
         if method == "PUT" and path.startswith("/products/"):
-            return update_product(
-                event,
-                request_id
-            )
+            return update_product(event, request_id)
 
         if method == "DELETE" and path.startswith("/products/"):
-            return deactivate_product(
-                event,
-                request_id
-            )
+            return deactivate_product(event, request_id)
 
         return respond(
             404,
             {
                 "success": False,
-                "error": {
-                    "code": "NOT_FOUND",
-                    "message": "No matching route."
-                }
+                "message": "No matching route."
             },
             request_id
         )
@@ -287,10 +239,7 @@ def handler(event, context):
             500,
             {
                 "success": False,
-                "error": {
-                    "code": "INTERNAL_ERROR",
-                    "message": "Unexpected error."
-                }
+                "message": "Unexpected error."
             },
             request_id
         )
@@ -360,15 +309,16 @@ def create_product(event, request_id):
         body = json.loads(
             event.get("body") or "{}"
         )
+
     except json.JSONDecodeError:
+
         return respond(
             400,
             {
                 "success": False,
-                "error": {
-                    "code": "INVALID_JSON",
-                    "message": "Request body must contain valid JSON."
-                }
+                "message": (
+                    "Request body must contain valid JSON."
+                )
             },
             request_id
         )
@@ -376,14 +326,12 @@ def create_product(event, request_id):
     validation_error = validate_product_data(body)
 
     if validation_error:
+
         return respond(
             400,
             {
                 "success": False,
-                "error": {
-                    "code": "VALIDATION_ERROR",
-                    "message": validation_error
-                }
+                "message": validation_error
             },
             request_id
         )
@@ -412,13 +360,10 @@ def create_product(event, request_id):
                     404,
                     {
                         "success": False,
-                        "error": {
-                            "code": "CATEGORY_NOT_FOUND",
-                            "message": (
-                                f"Category '{body['category'].strip()}' "
-                                "was not found."
-                            )
-                        }
+                        "message": (
+                            f"Category '{body['category'].strip()}' "
+                            "was not found."
+                        )
                     },
                     request_id
                 )
@@ -477,7 +422,11 @@ def create_product(event, request_id):
             "message": "Product created successfully.",
             "data": {
                 "product_id": product_id,
-                **body
+                "product_name": body["product_name"],
+                "category": body["category"],
+                "description": body.get("description"),
+                "price": body["price"],
+                "stock_quantity": body["stock_quantity"]
             }
         },
         request_id
@@ -541,10 +490,7 @@ def get_product(event, request_id):
             404,
             {
                 "success": False,
-                "error": {
-                    "code": "PRODUCT_NOT_FOUND",
-                    "message": "Product not found."
-                }
+                "message": "Product not found."
             },
             request_id
         )
@@ -598,7 +544,6 @@ def list_products(event, request_id):
     if category:
 
         query += " AND c.category_name=%s"
-
         params.append(category.strip())
 
     conn = get_db_connection()
@@ -653,18 +598,20 @@ def update_product(event, request_id):
         product_id = path.rstrip("/").split("/")[-1]
 
     try:
+
         body = json.loads(
             event.get("body") or "{}"
         )
+
     except json.JSONDecodeError:
+
         return respond(
             400,
             {
                 "success": False,
-                "error": {
-                    "code": "INVALID_JSON",
-                    "message": "Request body must contain valid JSON."
-                }
+                "message": (
+                    "Request body must contain valid JSON."
+                )
             },
             request_id
         )
@@ -675,14 +622,12 @@ def update_product(event, request_id):
     )
 
     if validation_error:
+
         return respond(
             400,
             {
                 "success": False,
-                "error": {
-                    "code": "VALIDATION_ERROR",
-                    "message": validation_error
-                }
+                "message": validation_error
             },
             request_id
         )
@@ -710,10 +655,7 @@ def update_product(event, request_id):
                     404,
                     {
                         "success": False,
-                        "error": {
-                            "code": "PRODUCT_NOT_FOUND",
-                            "message": "Product not found."
-                        }
+                        "message": "Product not found."
                     },
                     request_id
                 )
@@ -738,13 +680,10 @@ def update_product(event, request_id):
                         404,
                         {
                             "success": False,
-                            "error": {
-                                "code": "CATEGORY_NOT_FOUND",
-                                "message": (
-                                    f"Category '{body['category'].strip()}' "
-                                    "was not found."
-                                )
-                            }
+                            "message": (
+                                f"Category '{body['category'].strip()}' "
+                                "was not found."
+                            )
                         },
                         request_id
                     )
@@ -880,10 +819,7 @@ def deactivate_product(event, request_id):
                     404,
                     {
                         "success": False,
-                        "error": {
-                            "code": "PRODUCT_NOT_FOUND",
-                            "message": "Product not found."
-                        }
+                        "message": "Product not found."
                     },
                     request_id
                 )
@@ -894,10 +830,9 @@ def deactivate_product(event, request_id):
                     409,
                     {
                         "success": False,
-                        "error": {
-                            "code": "PRODUCT_ALREADY_INACTIVE",
-                            "message": "Product is already inactive."
-                        }
+                        "message": (
+                            "Product is already inactive."
+                        )
                     },
                     request_id
                 )
