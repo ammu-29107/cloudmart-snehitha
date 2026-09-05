@@ -2154,7 +2154,7 @@ jobs:
               --aws-sigv4 "aws:amz:${{ secrets.AWS_REGION }}:lambda" \
               --user "$AWS_ACCESS_KEY_ID:$AWS_SECRET_ACCESS_KEY" \
               -H "x-amz-security-token: $AWS_SESSION_TOKEN" \
-              -H "Authorization: Bearer wrong-token" \
+              -H "X-CloudMart-Token: wrong-token" \
               "$URL")
 
 
@@ -2245,7 +2245,7 @@ jobs:
               --aws-sigv4 "aws:amz:${{ secrets.AWS_REGION }}:lambda" \
               --user "$AWS_ACCESS_KEY_ID:$AWS_SECRET_ACCESS_KEY" \
               -H "x-amz-security-token: $AWS_SESSION_TOKEN" \
-              -H "Authorization: Bearer ${{ secrets.CLOUDMART_API_TOKEN }}" \
+              -H "X-CloudMart-Token: ${{ secrets.CLOUDMART_API_TOKEN }}" \
               "$URL")
 
 

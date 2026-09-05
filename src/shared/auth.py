@@ -21,13 +21,13 @@ def authorize(event):
 
     headers = event.get("headers") or {}
 
-    authorization = (
-        headers.get("Authorization")
-        or headers.get("authorization")
+    cloudmart_token = (
+        headers.get("X-CloudMart-Token")
+        or headers.get("x-cloudmart-token")
     )
 
     # Missing Authorization header
-    if not authorization:
+    if not cloudmart_token:
         return {
             "authorized": False,
             "code": "MISSING_AUTHORIZATION",
@@ -36,7 +36,7 @@ def authorize(event):
 
     # Expected format:
     # Authorization: Bearer <token>
-    if not authorization.startswith("Bearer "):
+    if not cloudmart_token.startswith("Bearer "):
         return {
             "authorized": False,
             "code": "INVALID_AUTHORIZATION_FORMAT",
@@ -46,7 +46,7 @@ def authorize(event):
             )
         }
 
-    provided_token = authorization.split(
+    provided_token = cloudmart_token.split(
         "Bearer ",
         1
     )[1].strip()
