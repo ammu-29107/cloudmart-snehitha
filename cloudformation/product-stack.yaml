@@ -83,7 +83,9 @@ Resources:
                 Action:
                   - ssm:GetParameter
                 Resource:
-                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudmart/${Environment}/auth/token
+                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudmart/${Environment}/auth/customer-token
+                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudmart/${Environment}/auth/product-owner-token
+                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudmart/${Environment}/auth/admin-token 
 
 
         # --------------------------------------------------------
@@ -169,8 +171,14 @@ Resources:
       Environment:
         Variables:
 
-          AUTH_TOKEN_PARAM:
-            !Sub /cloudmart/${Environment}/auth/token
+          CUSTOMER_TOKEN_PARAM:
+            !Sub /cloudmart/${Environment}/auth/customer-token
+
+          PRODUCT_OWNER_TOKEN_PARAM:
+            !Sub /cloudmart/${Environment}/auth/product-owner-token
+
+          ADMIN_TOKEN_PARAM:
+            !Sub /cloudmart/${Environment}/auth/admin-token
 
           ENVIRONMENT:
             !Ref Environment
@@ -281,7 +289,7 @@ Resources:
                   - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudmart/${Environment}/database/name
                   - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudmart/${Environment}/database/username
                   - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudmart/${Environment}/inventory/low-stock-threshold
-                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudmart/${Environment}/auth/token
+                  
 
 
         # --------------------------------------------------------
@@ -438,7 +446,7 @@ Resources:
         !GetAtt ProductLambda.Arn
 
       AuthType:
-        AWS_IAM
+        NONE
 
 
   # ==============================================================
@@ -458,7 +466,7 @@ Resources:
       Principal: '*'
 
       FunctionUrlAuthType:
-        AWS_IAM
+        NONE
 
 
   # ==============================================================

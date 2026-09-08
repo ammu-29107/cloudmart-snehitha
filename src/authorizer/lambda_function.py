@@ -14,7 +14,10 @@ ssm = boto3.client("ssm")
 lambda_client = boto3.client("lambda")
 
 
-AUTH_TOKEN_PARAM = os.environ["AUTH_TOKEN_PARAM"]
+CUSTOMER_TOKEN_PARAM = os.environ["CUSTOMER_TOKEN_PARAM"]
+PRODUCT_OWNER_TOKEN_PARAM = os.environ["PRODUCT_OWNER_TOKEN_PARAM"]
+ADMIN_TOKEN_PARAM = os.environ["ADMIN_TOKEN_PARAM"]
+
 PRODUCT_FUNCTION_NAME = os.environ["PRODUCT_FUNCTION_NAME"]
 
 ENVIRONMENT = os.environ.get(
@@ -32,6 +35,116 @@ def response(status_code, body):
         },
         "body": json.dumps(body)
     }
+
+
+def get_role(supplied_token):
+
+    parameters = ssm.get_parameters(
+        Names=[
+            CUSTOMER_TOKEN_PARAM,
+            PRODUCT_OWNER_TOKEN_PARAM,
+            ADMIN_TOKEN_PARAM
+        ],
+        WithDecryption=True
+    )
+
+    token_roles = {}
+
+    for parameter in parameters["Parameters"]:
+
+        name = parameter["Name"]
+        value = parameter["Value"]
+
+        if name == CUSTOMER_TOKEN_PARAM:
+            token_roles["CUSTOMER"] = value
+
+        elif name == PRODUCT_OWNER_TOKEN_PARAM:
+            token_roles["PRODUCT_OWNER"] = value
+
+        elif name == ADMIN_TOKEN_PARAM:
+            token_roles["ADMIN"] = value
+
+    for role, expected_token in token_roles.items():
+
+        if secrets.compare_digest(
+            supplied_token,
+            expected_token
+        ):
+            return role
+
+    return None
+
+
+def is_product_path(path):
+
+    return (
+        path == "/products"
+        or path.startswith("/products/")
+    )
+
+
+def is_allowed(role, method):
+
+    permissions = {
+        "CUSTOMER": {
+            "GET"
+        },
+
+        "PRODUCT_OWNER": {
+            "GET",
+            "POST",
+            "PUT",
+            "DELETE"
+        },
+
+        "ADMIN": {
+            "GET",
+            "POST",
+            "PUT",
+            "DELETE"
+        }
+    }
+
+    return method in permissions.get(role, set())
+
+
+def invoke_product_lambda(event):
+
+    invoke_response = lambda_client.invoke(
+        FunctionName=PRODUCT_FUNCTION_NAME,
+        InvocationType="RequestResponse",
+        Payload=json.dumps(event).encode("utf-8")
+    )
+
+    if invoke_response.get("FunctionError"):
+
+        logger.error(
+            json.dumps(
+                {
+                    "event": "product_lambda_error",
+                    "function_error": invoke_response[
+                        "FunctionError"
+                    ]
+                }
+            )
+        )
+
+        return response(
+            502,
+            {
+                "authorized": True,
+                "error": {
+                    "code": "PRODUCT_SERVICE_ERROR",
+                    "message": "Product service unavailable."
+                }
+            }
+        )
+
+    payload = invoke_response["Payload"].read()
+
+    return json.loads(
+        payload.decode("utf-8")
+    )
 
 
 def lambda_handler(event, context):
@@ -73,19 +186,19 @@ def lambda_handler(event, context):
 
         headers = event.get("headers") or {}
 
-        authorization = (
-            headers.get("Authorization")
-            or headers.get("authorization")
+        supplied_token = (
+            headers.get("X-CloudMart-Token")
+            or headers.get("x-cloudmart-token")
         )
 
-        if not authorization:
+        if not supplied_token:
 
             logger.info(
                 json.dumps(
                     {
                         "request_id": request_id,
                         "event": "authorization_failed",
-                        "reason": "missing_authorization_header"
+                        "reason": "missing_token"
                     }
                 )
             )
@@ -102,31 +215,7 @@ def lambda_handler(event, context):
                 }
             )
 
-        if not authorization.startswith("Bearer "):
-
-            logger.info(
-                json.dumps(
-                    {
-                        "request_id": request_id,
-                        "event": "authorization_failed",
-                        "reason": "invalid_authorization_scheme"
-                    }
-                )
-            )
-
-            return response(
-                401,
-                {
-                    "authorized": False,
-                    "error": {
-                        "code": "UNAUTHORIZED",
-                        "message": "Invalid authentication credentials.",
-                        "requestId": request_id
-                    }
-                }
-            )
-
-        supplied_token = authorization[7:].strip()
+        supplied_token = supplied_token.strip()
 
         if not supplied_token:
 
@@ -143,20 +232,12 @@ def lambda_handler(event, context):
             )
 
         # ========================================================
-        # TOKEN VALIDATION
+        # IDENTIFY ROLE
         # ========================================================
 
-        parameter = ssm.get_parameter(
-            Name=AUTH_TOKEN_PARAM,
-            WithDecryption=True
-        )
+        role = get_role(supplied_token)
 
-        expected_token = parameter["Parameter"]["Value"]
-
-        if not secrets.compare_digest(
-            supplied_token,
-            expected_token
-        ):
+        if role is None:
 
             logger.info(
                 json.dumps(
@@ -180,14 +261,51 @@ def lambda_handler(event, context):
                 }
             )
 
+        logger.info(
+            json.dumps(
+                {
+                    "request_id": request_id,
+                    "event": "role_identified",
+                    "role": role,
+                    "method": method,
+                    "path": path
+                }
+            )
+        )
+
         # ========================================================
-        # METHOD AUTHORIZATION
-        #
-        # External clients are currently allowed to READ products
-        # only.
+        # ROUTE CHECK
         # ========================================================
 
-        if method != "GET":
+        if not is_product_path(path):
+
+            logger.info(
+                json.dumps(
+                    {
+                        "request_id": request_id,
+                        "event": "route_not_found",
+                        "path": path
+                    }
+                )
+            )
+
+            return response(
+                404,
+                {
+                    "authorized": True,
+                    "error": {
+                        "code": "NOT_FOUND",
+                        "message": "Requested route was not found.",
+                        "requestId": request_id
+                    }
+                }
+            )
+
+        # ========================================================
+        # ROLE + METHOD AUTHORIZATION
+        # ========================================================
+
+        if not is_allowed(role, method):
 
             logger.info(
                 json.dumps(
@@ -195,6 +313,7 @@ def lambda_handler(event, context):
                         "request_id": request_id,
                         "event": "authorization_failed",
                         "reason": "method_not_allowed",
+                        "role": role,
                         "method": method,
                         "path": path
                     }
@@ -208,8 +327,8 @@ def lambda_handler(event, context):
                     "error": {
                         "code": "FORBIDDEN",
                         "message": (
-                            "Only GET requests are permitted "
-                            "through the public product endpoint."
+                            "You do not have permission "
+                            "to perform this operation."
                         ),
                         "requestId": request_id
                     }
@@ -225,59 +344,14 @@ def lambda_handler(event, context):
                 {
                     "request_id": request_id,
                     "event": "invoking_product_lambda",
+                    "role": role,
                     "method": method,
                     "path": path
                 }
             )
         )
 
-        invoke_response = lambda_client.invoke(
-            FunctionName=PRODUCT_FUNCTION_NAME,
-            InvocationType="RequestResponse",
-            Payload=json.dumps(event).encode("utf-8")
-        )
-
-        # ========================================================
-        # PRODUCT LAMBDA ERROR
-        # ========================================================
-
-        if invoke_response.get("FunctionError"):
-
-            logger.error(
-                json.dumps(
-                    {
-                        "request_id": request_id,
-                        "event": "product_lambda_error",
-                        "function_error": invoke_response[
-                            "FunctionError"
-                        ]
-                    }
-                )
-            )
-
-            return response(
-                502,
-                {
-                    "authorized": True,
-                    "error": {
-                        "code": "PRODUCT_SERVICE_ERROR",
-                        "message": "Product service unavailable.",
-                        "requestId": request_id
-                    }
-                }
-            )
-
-        # ========================================================
-        # RETURN PRODUCT RESPONSE
-        # ========================================================
-
-        payload = invoke_response["Payload"].read()
-
-        product_response = json.loads(
-            payload.decode("utf-8")
-        )
-
-        return product_response
+        return invoke_product_lambda(event)
 
     except Exception as exc:
 
@@ -287,7 +361,8 @@ def lambda_handler(event, context):
                     "request_id": request_id,
                     "event": "authorizer_error",
                     "error_type": type(exc).__name__,
-                    "message": str(exc)
+                    "message": str(exc),
+                    "request_id": request_id
                 }
             )
         )
