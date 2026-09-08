@@ -2051,7 +2051,9 @@ jobs:
 
         run: |
 
-          URL="${{ steps.authorizer.outputs.authorizer_url }}/products"
+          BASE_URL="${{ steps.authorizer.outputs.authorizer_url }}"
+          BASE_URL="${BASE_URL%/}"
+          URL="$BASE_URL/products"
 
 
           echo "Testing Authorizer with customer token..."
