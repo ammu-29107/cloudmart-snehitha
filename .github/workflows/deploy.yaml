@@ -1199,17 +1199,39 @@ jobs:
 
 
       # ========================================================
-      # AUTH TOKEN
+      # AUTHENTICATION TOKENS
       # ========================================================
 
-      - name: Write auth token SecureString
+      - name: Write customer token SecureString
 
         run: |
 
           aws ssm put-parameter \
-            --name "/cloudmart/dev/auth/token" \
+            --name "/cloudmart/dev/auth/customer-token" \
             --type SecureString \
-            --value "${{ secrets.CLOUDMART_API_TOKEN }}" \
+            --value "${{ secrets.CLOUDMART_CUSTOMER_TOKEN }}" \
+            --overwrite
+
+
+      - name: Write product owner token SecureString
+
+        run: |
+
+          aws ssm put-parameter \
+            --name "/cloudmart/dev/auth/product-owner-token" \
+            --type SecureString \
+            --value "${{ secrets.CLOUDMART_PRODUCT_OWNER_TOKEN }}" \
+            --overwrite
+
+
+      - name: Write admin token SecureString
+
+        run: |
+
+          aws ssm put-parameter \
+            --name "/cloudmart/dev/auth/admin-token" \
+            --type SecureString \
+            --value "${{ secrets.CLOUDMART_ADMIN_TOKEN }}" \
             --overwrite
 
 
@@ -1287,21 +1309,8 @@ jobs:
           }
 
 
-          test -f src/shared/auth.py || {
-            echo "ERROR: src/shared/auth.py not found."
-            exit 1
-          }
-
-
           cp src/product/handler.py \
             build/product/handler.py
-
-
-          mkdir -p build/product/shared
-
-
-          cp src/shared/auth.py \
-            build/product/shared/auth.py
 
 
           pip install pymysql \
@@ -1807,37 +1816,6 @@ jobs:
 
 
       # ========================================================
-      # READ PRODUCT URL
-      # ========================================================
-
-      - name: Read Product Function URL
-
-        id: outputs
-
-        run: |
-
-          PRODUCT_URL=$(aws cloudformation describe-stacks \
-            --stack-name "$STACK_NAME" \
-            --query "Stacks[0].Outputs[?OutputKey=='ProductFunctionUrl'].OutputValue" \
-            --output text)
-
-
-          if [ -z "$PRODUCT_URL" ] || [ "$PRODUCT_URL" = "None" ]; then
-
-            echo "ERROR: Product Function URL was not returned."
-
-            exit 1
-
-          fi
-
-
-          echo "Product URL: $PRODUCT_URL"
-
-
-          echo "product_url=$PRODUCT_URL" >> "$GITHUB_OUTPUT"
-
-
-      # ========================================================
       # READ AUTHORIZER URL
       # ========================================================
 
@@ -2018,288 +1996,99 @@ jobs:
 
 
       # ========================================================
-      # PRODUCT TEST - NO TOKEN
+      # AUTHORIZE TEST - WRONG TOKEN
       # ========================================================
 
-      - name: Smoke test - Product without token returns 401
+      - name: Smoke test - Authorizer rejects wrong token
 
         run: |
 
-          URL="${{ steps.outputs.outputs.product_url }}products"
+          URL="${{ steps.authorizer.outputs.authorizer_url }}/products"
 
-          echo "Testing Product without application token..."
+
+          echo "Testing Authorizer with wrong token..."
 
           echo "$URL"
 
           echo
 
 
-          SUCCESS=false
+          STATUS=$(curl \
+            -s \
+            -o /tmp/authorizer-wrong-token-response.txt \
+            -w "%{http_code}" \
+            --max-time 15 \
+            -H "X-CloudMart-Token: wrong-token" \
+            "$URL")
 
 
-          for attempt in {1..10}; do
-
-            echo "Attempt $attempt/10"
+          echo "Authorizer HTTP status: $STATUS"
 
 
-            STATUS=$(curl \
-              -s \
-              -o /tmp/product-no-token-response.txt \
-              -w "%{http_code}" \
-              --max-time 15 \
-              --aws-sigv4 "aws:amz:${{ secrets.AWS_REGION }}:lambda" \
-              --user "$AWS_ACCESS_KEY_ID:$AWS_SECRET_ACCESS_KEY" \
-              -H "x-amz-security-token: $AWS_SESSION_TOKEN" \
-              "$URL")
+          if [ "$STATUS" -ne 401 ]; then
 
+            echo "ERROR: Authorizer did not reject wrong token."
 
-            echo "Product HTTP status: $STATUS"
-
-
-            if [ "$STATUS" -eq 401 ]; then
-
-              echo "Product correctly rejected missing application token."
-
-
-              echo "Response:"
-
-              cat /tmp/product-no-token-response.txt || true
-
-
-              SUCCESS=true
-
-              break
-
-
-            elif [ "$STATUS" -eq 403 ]; then
-
-              echo "Received HTTP 403."
-
-              echo "Checking IAM Function URL access..."
-
-              cat /tmp/product-no-token-response.txt || true
-
-              sleep 10
-
-
-            else
-
-              echo "Unexpected Product response: $STATUS"
-
-              cat /tmp/product-no-token-response.txt || true
-
-              exit 1
-
-            fi
-
-          done
-
-
-          if [ "$SUCCESS" != "true" ]; then
-
-            echo
-
-            echo "ERROR: Product did not return 401 for missing application token."
+            cat /tmp/authorizer-wrong-token-response.txt || true
 
             exit 1
 
           fi
 
 
-      - name: Debug Product Function URL IAM
-        run: |
-          echo "=== Product Function URL ==="
-          aws lambda get-function-url-config \
-            --function-name cloudmart-dev-product
+          echo "Authorizer correctly rejected wrong token."
 
-          echo
-          echo "=== Product Lambda Resource Policy ==="
-          aws lambda get-policy \
-            --function-name cloudmart-dev-product \
-            --query 'Policy' \
-            --output text
+          echo "Response:"
+
+          cat /tmp/authorizer-wrong-token-response.txt || true
 
 
       # ========================================================
-      # PRODUCT TEST - WRONG TOKEN
+      # AUTHORIZE TEST - CUSTOMER TOKEN
       # ========================================================
 
-      - name: Smoke test - Product wrong token returns 401
+      - name: Smoke test - Customer token can access products
 
         run: |
 
-          URL="${{ steps.outputs.outputs.product_url }}products"
+          URL="${{ steps.authorizer.outputs.authorizer_url }}/products"
 
 
-          echo "Testing Product with wrong application token..."
+          echo "Testing Authorizer with customer token..."
 
           echo "$URL"
 
           echo
 
 
-          SUCCESS=false
+          STATUS=$(curl \
+            -s \
+            -o /tmp/customer-product-response.txt \
+            -w "%{http_code}" \
+            --max-time 30 \
+            -H "X-CloudMart-Token: ${{ secrets.CLOUDMART_CUSTOMER_TOKEN }}" \
+            "$URL")
 
 
-          for attempt in {1..10}; do
-
-            echo "Attempt $attempt/10"
+          echo "Authorizer/Product HTTP status: $STATUS"
 
 
-            STATUS=$(curl \
-              -s \
-              -o /tmp/product-wrong-token-response.txt \
-              -w "%{http_code}" \
-              --max-time 15 \
-              --aws-sigv4 "aws:amz:${{ secrets.AWS_REGION }}:lambda" \
-              --user "$AWS_ACCESS_KEY_ID:$AWS_SECRET_ACCESS_KEY" \
-              -H "x-amz-security-token: $AWS_SESSION_TOKEN" \
-              -H "X-CloudMart-Token: wrong-token" \
-              "$URL")
+          if [ "$STATUS" -ne 200 ]; then
 
+            echo "ERROR: Customer token could not access products."
 
-            echo "Product HTTP status: $STATUS"
-
-
-            if [ "$STATUS" -eq 401 ]; then
-
-              echo "Product correctly rejected wrong application token."
-
-
-              echo "Response:"
-
-              cat /tmp/product-wrong-token-response.txt || true
-
-
-              SUCCESS=true
-
-              break
-
-
-            elif [ "$STATUS" -eq 403 ]; then
-
-              echo "Received HTTP 403."
-
-              echo "Checking IAM Function URL access..."
-
-              cat /tmp/product-wrong-token-response.txt || true
-
-              sleep 10
-
-
-            else
-
-              echo "Unexpected Product response: $STATUS"
-
-              cat /tmp/product-wrong-token-response.txt || true
-
-              exit 1
-
-            fi
-
-          done
-
-
-          if [ "$SUCCESS" != "true" ]; then
-
-            echo
-
-            echo "ERROR: Product did not return 401 for wrong application token."
+            cat /tmp/customer-product-response.txt || true
 
             exit 1
 
           fi
 
 
-      # ========================================================
-      # PRODUCT TEST - CORRECT TOKEN
-      # ========================================================
+          echo "Customer token successfully accessed products."
 
-      - name: Smoke test - Product correct token returns 200
+          echo "Response:"
 
-        run: |
-
-          URL="${{ steps.outputs.outputs.product_url }}products"
-
-
-          echo "Testing Product with correct application token..."
-
-          echo "$URL"
-
-          echo
-
-
-          SUCCESS=false
-
-
-          for attempt in {1..10}; do
-
-            echo "Attempt $attempt/10"
-
-
-            STATUS=$(curl \
-              -s \
-              -o /tmp/product-correct-token-response.txt \
-              -w "%{http_code}" \
-              --max-time 15 \
-              --aws-sigv4 "aws:amz:${{ secrets.AWS_REGION }}:lambda" \
-              --user "$AWS_ACCESS_KEY_ID:$AWS_SECRET_ACCESS_KEY" \
-              -H "x-amz-security-token: $AWS_SESSION_TOKEN" \
-              -H "X-CloudMart-Token: ${{ secrets.CLOUDMART_API_TOKEN }}" \
-              "$URL")
-
-
-            echo "Product HTTP status: $STATUS"
-
-
-            if [ "$STATUS" -eq 200 ]; then
-
-              echo "Product Function URL is healthy."
-
-
-              echo "Response:"
-
-              cat /tmp/product-correct-token-response.txt || true
-
-
-              SUCCESS=true
-
-              break
-
-
-            elif [ "$STATUS" -eq 403 ]; then
-
-              echo "Received HTTP 403."
-
-              echo "Checking IAM Function URL access..."
-
-              cat /tmp/product-correct-token-response.txt || true
-
-              sleep 10
-
-
-            else
-
-              echo "Unexpected Product response: $STATUS"
-
-              cat /tmp/product-correct-token-response.txt || true
-
-              exit 1
-
-            fi
-
-          done
-
-
-          if [ "$SUCCESS" != "true" ]; then
-
-            echo
-
-            echo "ERROR: Product Function URL did not return 200."
-
-            exit 1
-
-          fi
+          cat /tmp/customer-product-response.txt || true
 
 
   # ============================================================

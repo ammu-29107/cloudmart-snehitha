@@ -7,8 +7,6 @@ import datetime
 import boto3
 import pymysql
 
-from shared.auth import authorize
-
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -173,31 +171,6 @@ def handler(event, context):
         method=method,
         path=path
     )
-
-    # APPLICATION AUTHORIZATION
-    log_json(
-        request_id=request_id,
-        event="authorization_check_started"
-    )
-
-    auth_result = authorize(event)
-
-    log_json(
-        request_id=request_id,
-        event="authorization_result",
-        authorized=auth_result.get("authorized"),
-        code=auth_result.get("code")
-    )
-
-    if not auth_result["authorized"]:
-        return respond(
-            401,
-            {
-                "success": False,
-                "message": auth_result["message"]
-            },
-            request_id
-        )
 
     # BUSINESS ROUTING
     try:
