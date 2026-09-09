@@ -33,7 +33,7 @@ def response(status_code, body):
         "headers": {
             "Content-Type": "application/json"
         },
-        "body": json.dumps(body)
+        "body": json.dumps(body, indent=4)
     }
 
 
@@ -108,7 +108,7 @@ def is_allowed(role, method):
     return method in permissions.get(role, set())
 
 
-def invoke_product_lambda(event):
+def invoke_product_lambda(event, request_id):
 
     invoke_response = lambda_client.invoke(
         FunctionName=PRODUCT_FUNCTION_NAME,
@@ -121,6 +121,7 @@ def invoke_product_lambda(event):
         logger.error(
             json.dumps(
                 {
+                    "request_id": request_id,
                     "event": "product_lambda_error",
                     "function_error": invoke_response[
                         "FunctionError"
@@ -209,8 +210,7 @@ def lambda_handler(event, context):
                     "authorized": False,
                     "error": {
                         "code": "UNAUTHORIZED",
-                        "message": "Authentication is required.",
-                        "requestId": request_id
+                        "message": "Authentication is required."
                     }
                 }
             )
@@ -219,17 +219,27 @@ def lambda_handler(event, context):
 
         if not supplied_token:
 
+            logger.info(
+                json.dumps(
+                    {
+                        "request_id": request_id,
+                        "event": "authorization_failed",
+                        "reason": "missing_token"
+                    }
+                )
+            )
+
             return response(
                 401,
                 {
                     "authorized": False,
                     "error": {
                         "code": "UNAUTHORIZED",
-                        "message": "Invalid authentication credentials.",
-                        "requestId": request_id
+                        "message": "Invalid authentication credentials."
                     }
                 }
             )
+        
 
         # ========================================================
         # IDENTIFY ROLE
@@ -255,8 +265,7 @@ def lambda_handler(event, context):
                     "authorized": False,
                     "error": {
                         "code": "UNAUTHORIZED",
-                        "message": "Invalid authentication credentials.",
-                        "requestId": request_id
+                        "message": "Invalid authentication credentials."
                     }
                 }
             )
@@ -295,8 +304,7 @@ def lambda_handler(event, context):
                     "authorized": True,
                     "error": {
                         "code": "NOT_FOUND",
-                        "message": "Requested route was not found.",
-                        "requestId": request_id
+                        "message": "Requested route was not found."
                     }
                 }
             )
@@ -329,8 +337,7 @@ def lambda_handler(event, context):
                         "message": (
                             "You do not have permission "
                             "to perform this operation."
-                        ),
-                        "requestId": request_id
+                        )
                     }
                 }
             )
@@ -351,7 +358,7 @@ def lambda_handler(event, context):
             )
         )
 
-        return invoke_product_lambda(event)
+        return invoke_product_lambda(event, request_id)
 
     except Exception as exc:
 
@@ -361,8 +368,7 @@ def lambda_handler(event, context):
                     "request_id": request_id,
                     "event": "authorizer_error",
                     "error_type": type(exc).__name__,
-                    "message": str(exc),
-                    "request_id": request_id
+                    "message": str(exc)
                 }
             )
         )
@@ -373,8 +379,7 @@ def lambda_handler(event, context):
                 "authorized": False,
                 "error": {
                     "code": "INTERNAL_ERROR",
-                    "message": "Authorization service error.",
-                    "requestId": request_id
+                    "message": "Authorization service error."
                 }
             }
         )
