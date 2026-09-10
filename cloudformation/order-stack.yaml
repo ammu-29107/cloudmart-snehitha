@@ -312,6 +312,9 @@ Outputs:
 
     Value:
       !GetAtt OrderLambda.Arn
+    
+    Export:
+      Name: !Sub cloudmart-${Environment}-order-lambda-arn
 
 
   OrderLambdaName:
@@ -320,6 +323,9 @@ Outputs:
 
     Value:
       !Ref OrderLambda
+
+    Export:
+      Name: !Sub cloudmart-${Environment}-order-lambda-name
 
 
   OrderQueueArn:
