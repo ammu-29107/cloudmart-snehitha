@@ -111,7 +111,7 @@ Resources:
         # INVOKE PRODUCT LAMBDA
         # --------------------------------------------------------
 
-        - PolicyName: AuthorizerInvokeProduct
+        - PolicyName: AuthorizerInvokeProductAndOrder
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
@@ -121,6 +121,8 @@ Resources:
                   - lambda:InvokeFunction
                 Resource:
                   - !GetAtt ProductLambda.Arn
+                  - Fn::ImportValue:
+                      !Sub cloudmart-${Environment}-order-lambda-arn
 
 
   # ==============================================================
@@ -186,6 +188,10 @@ Resources:
 
           PRODUCT_FUNCTION_NAME:
             !Ref ProductLambda
+
+          ORDER_FUNCTION_NAME:
+            Fn::ImportValue:
+              !Sub cloudmart-${Environment}-order-lambda-name
 
 
   # ==============================================================
