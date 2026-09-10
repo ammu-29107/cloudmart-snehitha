@@ -1,0 +1,197 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Description: >
+  CloudMart Order Processing infrastructure.
+  Consumes orders from SQS and processes them against RDS.
+
+Parameters:
+
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - prod
+
+  OrderProcessingCodeKey:
+    Type: String
+    Description: S3 key for the order processing Lambda deployment package.
+
+
+Resources:
+
+  # ============================================================
+  # ORDER PROCESSING LAMBDA IAM ROLE
+  # ============================================================
+
+  OrderProcessingLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub cloudmart-${Environment}-order-processing-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+
+      Policies:
+
+        # --------------------------------------------------------
+        # Database configuration from SSM
+        # --------------------------------------------------------
+
+        - PolicyName: OrderProcessingReadDatabaseParameters
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                Resource:
+                  - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudmart/${Environment}/database/host
+                  - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudmart/${Environment}/database/name
+                  - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudmart/${Environment}/database/username
+                  - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudmart/${Environment}/database/password
+
+        # --------------------------------------------------------
+        # Read and delete messages from Order Queue
+        # --------------------------------------------------------
+
+        - PolicyName: OrderProcessingSQSAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - sqs:ReceiveMessage
+                  - sqs:DeleteMessage
+                  - sqs:GetQueueAttributes
+                Resource:
+                  Fn::ImportValue:
+                    !Sub cloudmart-${Environment}-order-queue-arn
+
+        # --------------------------------------------------------
+        # Publish order events
+        # --------------------------------------------------------
+
+        - PolicyName: OrderProcessingEventBridgePublish
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - events:PutEvents
+                Resource:
+                  Fn::ImportValue:
+                    !Sub cloudmart-${Environment}-eventbus-arn
+
+        # --------------------------------------------------------
+        # CloudWatch Logs
+        # --------------------------------------------------------
+
+        - PolicyName: OrderProcessingCloudWatchLogs
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/cloudmart-${Environment}-order-processing:*
+
+  # ============================================================
+  # ORDER PROCESSING LAMBDA
+  # ============================================================
+
+  OrderProcessingLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub cloudmart-${Environment}-order-processing
+      Runtime: python3.12
+      Handler: handler.handler
+      Role: !GetAtt OrderProcessingLambdaRole.Arn
+
+      Timeout: 60
+      MemorySize: 256
+
+      VpcConfig:
+        SubnetIds:
+          - Fn::ImportValue:
+              !Sub cloudmart-${Environment}-private-subnet-a
+        SecurityGroupIds:
+          - Fn::ImportValue:
+              !Sub cloudmart-${Environment}-sg-lambda
+
+      Environment:
+        Variables:
+          ENVIRONMENT: !Ref Environment
+
+          DB_HOST_PARAM: !Sub /cloudmart/${Environment}/database/host
+          DB_NAME_PARAM: !Sub /cloudmart/${Environment}/database/name
+          DB_USER_PARAM: !Sub /cloudmart/${Environment}/database/username
+          DB_PASSWORD_PARAM: !Sub /cloudmart/${Environment}/database/password
+
+          EVENT_BUS_NAME: !Sub cloudmart-${Environment}-bus
+
+      Code:
+        S3Bucket:
+          Fn::ImportValue:
+            !Sub cloudmart-${Environment}-lambda-artifacts-bucket
+        S3Key: !Ref OrderProcessingCodeKey
+
+  # ============================================================
+  # SQS EVENT SOURCE MAPPING
+  # ============================================================
+
+  OrderProcessingEventSourceMapping:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      EventSourceArn:
+        Fn::ImportValue:
+          !Sub cloudmart-${Environment}-order-queue-arn
+
+      FunctionName: !GetAtt OrderProcessingLambda.Arn
+
+      BatchSize: 1
+      Enabled: true
+
+      FunctionResponseTypes:
+        - ReportBatchItemFailures
+
+
+# ==============================================================
+# OUTPUTS
+# ==============================================================
+
+Outputs:
+
+  OrderProcessingLambdaArn:
+    Description: Order Processing Lambda ARN
+    Value: !GetAtt OrderProcessingLambda.Arn
+    Export:
+      Name: !Sub cloudmart-${Environment}-order-processing-lambda-arn
+
+  OrderProcessingLambdaName:
+    Description: Order Processing Lambda name
+    Value: !Ref OrderProcessingLambda
+    Export:
+      Name: !Sub cloudmart-${Environment}-order-processing-lambda-name
+
+  OrderQueueArn:
+    Description: Existing Order Queue ARN used by the processor
+    Value:
+      Fn::ImportValue:
+        !Sub cloudmart-${Environment}-order-queue-arn
+
+  EventBusName:
+    Description: Existing CloudMart EventBridge bus
+    Value: !Sub cloudmart-${Environment}-bus
