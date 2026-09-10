@@ -19,6 +19,7 @@ PRODUCT_OWNER_TOKEN_PARAM = os.environ["PRODUCT_OWNER_TOKEN_PARAM"]
 ADMIN_TOKEN_PARAM = os.environ["ADMIN_TOKEN_PARAM"]
 
 PRODUCT_FUNCTION_NAME = os.environ["PRODUCT_FUNCTION_NAME"]
+ORDER_FUNCTION_NAME = os.environ["ORDER_FUNCTION_NAME"]
 
 ENVIRONMENT = os.environ.get(
     "ENVIRONMENT",
@@ -75,6 +76,16 @@ def get_role(supplied_token):
     return None
 
 
+def is_supported_path(path):
+
+    return (
+        path == "/products"
+        or path.startswith("/products/")
+        or path == "/orders"
+        or path.startswith("/orders/")
+        or path.startswith("/customers/")
+    )
+
 def is_product_path(path):
 
     return (
@@ -82,28 +93,46 @@ def is_product_path(path):
         or path.startswith("/products/")
     )
 
+def is_allowed(role, method, path):
 
-def is_allowed(role, method):
+    if is_product_path(path):
 
-    permissions = {
-        "CUSTOMER": {
-            "GET"
-        },
+        permissions = {
+            "CUSTOMER": {
+                "GET"
+            },
 
-        "PRODUCT_OWNER": {
-            "GET",
-            "POST",
-            "PUT",
-            "DELETE"
-        },
+            "PRODUCT_OWNER": {
+                "GET",
+                "POST",
+                "PUT",
+                "DELETE"
+            },
 
-        "ADMIN": {
-            "GET",
-            "POST",
-            "PUT",
-            "DELETE"
+            "ADMIN": {
+                "GET",
+                "POST",
+                "PUT",
+                "DELETE"
+            }
         }
-    }
+
+    else:
+
+        permissions = {
+            "CUSTOMER": {
+                "GET",
+                "POST",
+                "PUT"
+            },
+
+            "PRODUCT_OWNER": set(),
+
+            "ADMIN": {
+                "GET",
+                "PUT"
+            }
+        }
 
     return method in permissions.get(role, set())
 
@@ -137,6 +166,46 @@ def invoke_product_lambda(event, request_id):
                 "error": {
                     "code": "PRODUCT_SERVICE_ERROR",
                     "message": "Product service unavailable."
+                }
+            }
+        )
+
+    payload = invoke_response["Payload"].read()
+
+    return json.loads(
+        payload.decode("utf-8")
+    )
+
+
+def invoke_order_lambda(event, request_id):
+
+    invoke_response = lambda_client.invoke(
+        FunctionName=ORDER_FUNCTION_NAME,
+        InvocationType="RequestResponse",
+        Payload=json.dumps(event).encode("utf-8")
+    )
+
+    if invoke_response.get("FunctionError"):
+
+        logger.error(
+            json.dumps(
+                {
+                    "request_id": request_id,
+                    "event": "order_lambda_error",
+                    "function_error": invoke_response[
+                        "FunctionError"
+                    ]
+                }
+            )
+        )
+
+        return response(
+            502,
+            {
+                "authorized": True,
+                "error": {
+                    "code": "ORDER_SERVICE_ERROR",
+                    "message": "Order service unavailable."
                 }
             }
         )
@@ -286,7 +355,7 @@ def lambda_handler(event, context):
         # ROUTE CHECK
         # ========================================================
 
-        if not is_product_path(path):
+        if not is_supported_path(path):
 
             logger.info(
                 json.dumps(
@@ -313,7 +382,7 @@ def lambda_handler(event, context):
         # ROLE + METHOD AUTHORIZATION
         # ========================================================
 
-        if not is_allowed(role, method):
+        if not is_allowed(role, method, path):
 
             logger.info(
                 json.dumps(
@@ -343,14 +412,30 @@ def lambda_handler(event, context):
             )
 
         # ========================================================
-        # INVOKE PRODUCT LAMBDA
+        # INVOKE SERVICE LAMBDA
         # ========================================================
+
+        if is_product_path(path):
+
+            logger.info(
+                json.dumps(
+                    {
+                        "request_id": request_id,
+                        "event": "invoking_product_lambda",
+                        "role": role,
+                        "method": method,
+                        "path": path
+                    }
+                )
+            )
+
+            return invoke_product_lambda(event, request_id)
 
         logger.info(
             json.dumps(
                 {
                     "request_id": request_id,
-                    "event": "invoking_product_lambda",
+                    "event": "invoking_order_lambda",
                     "role": role,
                     "method": method,
                     "path": path
@@ -358,7 +443,7 @@ def lambda_handler(event, context):
             )
         )
 
-        return invoke_product_lambda(event, request_id)
+        return invoke_order_lambda(event, request_id)
 
     except Exception as exc:
 
