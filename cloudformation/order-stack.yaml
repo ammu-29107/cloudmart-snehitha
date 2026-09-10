@@ -1,0 +1,358 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Description: >
+  CloudMart order application stack.
+  Creates the Order Lambda, SQS order queue, dead-letter queue,
+  IAM role, and supporting permissions.
+
+
+# ================================================================
+# PARAMETERS
+# ================================================================
+
+Parameters:
+
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - prod
+
+  OrderCodeKey:
+    Type: String
+
+
+# ================================================================
+# RESOURCES
+# ================================================================
+
+Resources:
+
+
+  # ==============================================================
+  # ORDER DLQ
+  # ==============================================================
+
+  OrderDLQ:
+    Type: AWS::SQS::Queue
+
+    Properties:
+
+      QueueName:
+        !Sub cloudmart-${Environment}-order-dlq
+
+      MessageRetentionPeriod: 1209600
+
+      SqsManagedSseEnabled: true
+
+
+  # ==============================================================
+  # ORDER QUEUE
+  # ==============================================================
+
+  OrderQueue:
+    Type: AWS::SQS::Queue
+
+    Properties:
+
+      QueueName:
+        !Sub cloudmart-${Environment}-order-queue
+
+      VisibilityTimeout: 120
+
+      MessageRetentionPeriod: 345600
+
+      ReceiveMessageWaitTimeSeconds: 10
+
+      SqsManagedSseEnabled: true
+
+      RedrivePolicy:
+        deadLetterTargetArn:
+          !GetAtt OrderDLQ.Arn
+
+        maxReceiveCount: 3
+
+
+  # ==============================================================
+  # ORDER LAMBDA ROLE
+  # ==============================================================
+
+  OrderLambdaRole:
+    Type: AWS::IAM::Role
+
+    Properties:
+
+      RoleName:
+        !Sub cloudmart-${Environment}-order-lambda-role
+
+      AssumeRolePolicyDocument:
+
+        Version: '2012-10-17'
+
+        Statement:
+
+          - Effect: Allow
+
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+
+            Action:
+              - sts:AssumeRole
+
+
+      ManagedPolicyArns:
+
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+
+
+      Policies:
+
+
+        # --------------------------------------------------------
+        # SSM DATABASE PARAMETERS
+        # --------------------------------------------------------
+
+        - PolicyName: OrderSSMRead
+
+          PolicyDocument:
+
+            Version: '2012-10-17'
+
+            Statement:
+
+              - Effect: Allow
+
+                Action:
+                  - ssm:GetParameter
+
+                Resource:
+
+                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudmart/${Environment}/database/host
+
+                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudmart/${Environment}/database/name
+
+                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudmart/${Environment}/database/username
+
+                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudmart/${Environment}/database/password
+
+
+        # --------------------------------------------------------
+        # SQS
+        # --------------------------------------------------------
+
+        - PolicyName: OrderSQSSend
+
+          PolicyDocument:
+
+            Version: '2012-10-17'
+
+            Statement:
+
+              - Effect: Allow
+
+                Action:
+                  - sqs:SendMessage
+
+                Resource:
+                  !GetAtt OrderQueue.Arn
+
+
+        # --------------------------------------------------------
+        # EVENTBRIDGE
+        # --------------------------------------------------------
+
+        - PolicyName: OrderEventBridge
+
+          PolicyDocument:
+
+            Version: '2012-10-17'
+
+            Statement:
+
+              - Effect: Allow
+
+                Action:
+                  - events:PutEvents
+
+                Resource:
+                  - !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/cloudmart-${Environment}-bus
+
+
+        # --------------------------------------------------------
+        # CLOUDWATCH LOGGING
+        # --------------------------------------------------------
+
+        - PolicyName: OrderLogging
+
+          PolicyDocument:
+
+            Version: '2012-10-17'
+
+            Statement:
+
+              - Effect: Allow
+
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+
+                Resource:
+                  - !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:*
+
+
+  # ==============================================================
+  # ORDER LAMBDA
+  # ==============================================================
+
+  OrderLambda:
+    Type: AWS::Lambda::Function
+
+    Properties:
+
+      FunctionName:
+        !Sub cloudmart-${Environment}-order
+
+      Runtime:
+        python3.12
+
+      Handler:
+        handler.handler
+
+      Role:
+        !GetAtt OrderLambdaRole.Arn
+
+      Timeout: 30
+
+      MemorySize: 256
+
+
+      # ----------------------------------------------------------
+      # PRIVATE SUBNET
+      # ----------------------------------------------------------
+
+      VpcConfig:
+
+        SubnetIds:
+
+          - Fn::ImportValue:
+              !Sub cloudmart-${Environment}-private-subnet-a
+
+        SecurityGroupIds:
+
+          - Fn::ImportValue:
+              !Sub cloudmart-${Environment}-sg-lambda
+
+
+      # ----------------------------------------------------------
+      # CODE
+      # ----------------------------------------------------------
+
+      Code:
+
+        S3Bucket:
+          Fn::ImportValue:
+            !Sub cloudmart-${Environment}-lambda-artifacts-bucket
+
+        S3Key:
+          !Ref OrderCodeKey
+
+
+      # ----------------------------------------------------------
+      # ENVIRONMENT VARIABLES
+      # ----------------------------------------------------------
+
+      Environment:
+
+        Variables:
+
+          ENVIRONMENT:
+            !Ref Environment
+
+
+          # DATABASE
+
+          DB_HOST_PARAM:
+            !Sub /cloudmart/${Environment}/database/host
+
+          DB_NAME_PARAM:
+            !Sub /cloudmart/${Environment}/database/name
+
+          DB_USER_PARAM:
+            !Sub /cloudmart/${Environment}/database/username
+
+          DB_PASSWORD_PARAM:
+            !Sub /cloudmart/${Environment}/database/password
+
+
+          # SQS
+
+          ORDER_QUEUE_URL:
+            !Ref OrderQueue
+
+
+          # EVENTBRIDGE
+
+          EVENT_BUS_NAME:
+            !Sub cloudmart-${Environment}-bus
+
+
+# ================================================================
+# OUTPUTS
+# ================================================================
+
+Outputs:
+
+
+  OrderLambdaArn:
+
+    Description: Order Lambda ARN
+
+    Value:
+      !GetAtt OrderLambda.Arn
+
+
+  OrderLambdaName:
+
+    Description: Order Lambda name
+
+    Value:
+      !Ref OrderLambda
+
+
+  OrderQueueArn:
+
+    Description: Order SQS queue ARN
+
+    Value:
+      !GetAtt OrderQueue.Arn
+
+    Export:
+      Name:
+        !Sub cloudmart-${Environment}-order-queue-arn
+
+
+  OrderQueueUrl:
+
+    Description: Order SQS queue URL
+
+    Value:
+      !Ref OrderQueue
+
+    Export:
+      Name:
+        !Sub cloudmart-${Environment}-order-queue-url
+
+
+  OrderDLQArn:
+
+    Description: Order dead-letter queue ARN
+
+    Value:
+      !GetAtt OrderDLQ.Arn
+
+    Export:
+      Name:
+        !Sub cloudmart-${Environment}-order-dlq-arn
