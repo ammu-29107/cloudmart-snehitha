@@ -227,6 +227,61 @@ SAMPLE_DATA_STATEMENTS = [
         8,
         'ACTIVE'
       )
+    """,
+    """
+    INSERT IGNORE INTO customers (
+      customer_id,
+      first_name,
+      last_name,
+      email,
+      phone,
+      status
+    )
+    VALUES (
+      1,
+      'Test',
+      'Customer',
+      'test.customer@cloudmart.local',
+      '9876543210',
+      'ACTIVE'
+    )
+    """,
+
+    """
+    INSERT IGNORE INTO addresses (
+      address_id,
+      customer_id,
+      address_line1,
+      address_line2,
+      city,
+      state,
+      postal_code,
+      country,
+      is_default
+    )
+    VALUES
+      (
+        1,
+        1,
+        '123 CloudMart Street',
+        NULL,
+        'Hyderabad',
+        'Telangana',
+        '500001',
+        'India',
+        TRUE
+      ),
+      (
+        2,
+        1,
+        '456 CloudMart Avenue',
+        NULL,
+        'Hyderabad',
+        'Telangana',
+        '500002',
+        'India',
+        FALSE
+      )
     """
 ]
 
