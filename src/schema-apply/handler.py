@@ -164,7 +164,7 @@ DDL_STATEMENTS = [
     CREATE TABLE IF NOT EXISTS idempotency_keys (
       idempotency_key VARCHAR(64) PRIMARY KEY,
       order_id INT NOT NULL,
-      status ENUM('IN_PROGRESS','COMPLETED') NOT NULL,
+      status ENUM('IN_PROGRESS','COMPLETED', 'FAILED') NOT NULL,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (order_id) REFERENCES orders(order_id)
     )

@@ -165,6 +165,26 @@ def mark_idempotency_completed(cursor, order_id):
     )
 
 
+def mark_idempotency_failed(order_id):
+    connection = get_db_connection()
+
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                UPDATE idempotency_keys
+                SET status = 'FAILED'
+                WHERE order_id = %s
+                """,
+                (order_id,)
+            )
+
+            connection.commit()
+
+    finally:
+        connection.close()
+
+
 def process_order(order_id):
     connection = get_db_connection()
 
@@ -429,6 +449,10 @@ def process_order(order_id):
         mark_order_failed(
             order_id,
             str(exc)
+        )
+
+        mark_idempotency_failed(
+            order_id
         )
 
         publish_event(
