@@ -1233,6 +1233,25 @@ def cancel_order(event):
 
             conn.commit()
 
+        eventbridge.put_events(
+            Entries=[
+                {
+                    "Source": "cloudmart.order",
+                    "DetailType": "OrderCancelled",
+                    "EventBusName": os.environ["EVENT_BUS_NAME"],
+                    "Detail": json.dumps(
+                        {
+                            "event_id": str(uuid.uuid4()),
+                            "event_type": "OrderCancelled",
+                            "order_id": order_id,
+                            "customer_id": order["customer_id"],
+                            "status": "CANCELLED"
+                        }
+                    )
+                }
+            ]
+        )
+
         log_json(
             event="order_cancelled",
             order_id=order_id

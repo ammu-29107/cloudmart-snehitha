@@ -53,6 +53,7 @@ Resources:
           - OrderPlaced
           - OrderConfirmed
           - OrderFailed
+          - OrderCancelled
       Targets:
         - Id: OrderEventsToLogs
           Arn: !GetAtt OrderEventsLogGroup.Arn
