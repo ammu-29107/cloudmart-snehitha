@@ -832,6 +832,22 @@ def get_order_by_id(event):
 
     if not order_id:
 
+        path = (
+            event.get("rawPath")
+            or event.get("path")
+            or ""
+        )
+
+        path_parts = path.strip("/").split("/")
+
+        if (
+            len(path_parts) == 2
+            and path_parts[0] == "orders"
+        ):
+            order_id = path_parts[1]
+
+    if not order_id:
+
         return respond(
             400,
             {
