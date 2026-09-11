@@ -22,6 +22,12 @@ Resources:
       LogGroupName: !Sub /cloudmart/${Environment}/events/low-stock
       RetentionInDays: 14
 
+  OrderEventsLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /cloudmart/${Environment}/events/orders
+      RetentionInDays: 14
+
   LowStockRule:
     Type: AWS::Events::Rule
     Properties:
@@ -33,6 +39,23 @@ Resources:
       Targets:
         - Id: LowStockToLogs
           Arn: !GetAtt LowStockLogGroup.Arn
+
+  OrderEventsRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub cloudmart-${Environment}-order-events-rule
+      EventBusName: !Ref EventBus
+      EventPattern:
+        source:
+          - cloudmart.order
+          - cloudmart.order-processing
+        detail-type:
+          - OrderPlaced
+          - OrderConfirmed
+          - OrderFailed
+      Targets:
+        - Id: OrderEventsToLogs
+          Arn: !GetAtt OrderEventsLogGroup.Arn
 
   LowStockLogGroupPolicy:
     Type: AWS::Logs::ResourcePolicy
@@ -52,6 +75,26 @@ Resources:
             "Resource": "${LowStockLogGroup.Arn}:*"
           }]
         }
+
+  OrderEventsLogGroupPolicy:
+    Type: AWS::Logs::ResourcePolicy
+    Properties:
+      PolicyName: !Sub cloudmart-${Environment}-order-events-logs
+      PolicyDocument: !Sub |
+        {
+          "Version": "2012-10-17",
+          "Statement": [{
+            "Sid": "AllowEventBridgeToWriteOrderLogs",
+            "Effect": "Allow",
+            "Principal": {"Service": "events.amazonaws.com"},
+            "Action": [
+              "logs:CreateLogStream",
+              "logs:PutLogEvents"
+            ],
+            "Resource": "${OrderEventsLogGroup.Arn}:*"
+          }]
+        }
+
 
 Outputs:
   EventBusArn:
