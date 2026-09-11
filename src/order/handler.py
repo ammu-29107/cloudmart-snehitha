@@ -821,6 +821,140 @@ def create_order(
 
 
 # ================================================================
+# GET ORDER BY ID
+# ================================================================
+
+def get_order_by_id(event):
+
+    path_parameters = event.get("pathParameters") or {}
+
+    order_id = path_parameters.get("orderId")
+
+    if not order_id:
+
+        return respond(
+            400,
+            {
+                "success": False,
+                "message": "Order ID is required."
+            }
+        )
+
+    try:
+
+        order_id = int(order_id)
+
+    except ValueError:
+
+        return respond(
+            400,
+            {
+                "success": False,
+                "message": "Order ID must be an integer."
+            }
+        )
+
+    conn = None
+
+    try:
+
+        conn = get_db_connection()
+
+        with conn.cursor() as cursor:
+
+            cursor.execute(
+                """
+                SELECT
+                    order_id,
+                    customer_id,
+                    shipping_address_id,
+                    billing_address_id,
+                    status,
+                    total_amount,
+                    created_at,
+                    updated_at
+                FROM orders
+                WHERE order_id = %s
+                """,
+                (order_id,)
+            )
+
+            order = cursor.fetchone()
+
+            if not order:
+
+                conn.rollback()
+
+                return respond(
+                    404,
+                    {
+                        "success": False,
+                        "message": "Order not found."
+                    }
+                )
+
+            cursor.execute(
+                """
+                SELECT
+                    order_item_id,
+                    product_id,
+                    quantity,
+                    unit_price,
+                    subtotal
+                FROM order_items
+                WHERE order_id = %s
+                ORDER BY order_item_id
+                """,
+                (order_id,)
+            )
+
+            items = cursor.fetchall()
+
+        return respond(
+            200,
+            {
+                "success": True,
+                "data": {
+                    "order_id": order["order_id"],
+                    "customer_id": order["customer_id"],
+                    "shipping_address_id": order["shipping_address_id"],
+                    "billing_address_id": order["billing_address_id"],
+                    "status": order["status"],
+                    "total_amount": order["total_amount"],
+                    "created_at": order["created_at"],
+                    "updated_at": order["updated_at"],
+                    "items": items
+                }
+            }
+        )
+
+    except Exception as exc:
+
+        if conn:
+            conn.rollback()
+
+        log_json(
+            event="get_order_failed",
+            order_id=order_id,
+            error=str(exc),
+            error_type=type(exc).__name__
+        )
+
+        return respond(
+            500,
+            {
+                "success": False,
+                "message": "Unable to retrieve order."
+            }
+        )
+
+    finally:
+
+        if conn:
+            conn.close()
+
+
+# ================================================================
 # ROUTER
 # ================================================================
 
@@ -883,6 +1017,12 @@ def handler(event, context):
 
             return create_order(event)
 
+        if (
+            method == "GET"
+            and path.startswith("/orders/")
+        ):
+
+            return get_order_by_id(event)
 
         return respond(
 
