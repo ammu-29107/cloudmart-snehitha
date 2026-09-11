@@ -11,7 +11,6 @@ logger.setLevel(logging.INFO)
 
 ssm = boto3.client("ssm")
 events = boto3.client("events")
-sns = boto3.client("sns")
 
 
 DB_HOST_PARAM = os.environ["DB_HOST_PARAM"]
@@ -19,9 +18,6 @@ DB_NAME_PARAM = os.environ["DB_NAME_PARAM"]
 DB_USER_PARAM = os.environ["DB_USER_PARAM"]
 DB_PASSWORD_PARAM = os.environ["DB_PASSWORD_PARAM"]
 EVENT_BUS_NAME = os.environ["EVENT_BUS_NAME"]
-ORDER_NOTIFICATION_TOPIC_ARN = os.environ[
-    "ORDER_NOTIFICATION_TOPIC_ARN"
-]
 
 
 def get_parameter(name):
@@ -68,41 +64,6 @@ def publish_event(detail_type, detail):
             )
         )
 
-def publish_order_notification(
-    order_id,
-    customer_id,
-    previous_status,
-    new_status
-):
-    try:
-        sns.publish(
-            TopicArn=ORDER_NOTIFICATION_TOPIC_ARN,
-            Subject=f"CloudMart Order {order_id} Status Update",
-            Message=json.dumps(
-                {
-                    "order_id": order_id,
-                    "customer_id": customer_id,
-                    "previous_status": previous_status,
-                    "new_status": new_status
-                },
-                indent=4
-            )
-        )
-
-    except Exception as exc:
-        logger.error(
-            json.dumps(
-                {
-                    "event": "order_notification_failed",
-                    "order_id": order_id,
-                    "customer_id": customer_id,
-                    "previous_status": previous_status,
-                    "new_status": new_status,
-                    "error": str(exc),
-                    "error_type": type(exc).__name__
-                }
-            )
-        )
 
 def record_status_history(
     cursor,
@@ -262,7 +223,7 @@ def process_order(order_id):
                 )
 
                 connection.rollback()
-                return "IGNORED", None
+                return "IGNORED"
 
             current_status = order["status"]
 
@@ -286,7 +247,7 @@ def process_order(order_id):
                 )
 
                 connection.rollback()
-                return "IGNORED", order["customer_id"]
+                return "IGNORED"
 
             # ----------------------------------------------------
             # Normal processing starts only from PENDING.
@@ -304,7 +265,7 @@ def process_order(order_id):
                 )
 
                 connection.rollback()
-                return "IGNORED", order["customer_id"]
+                return "IGNORED"
 
             # ----------------------------------------------------
             # PENDING -> PROCESSING
@@ -324,15 +285,6 @@ def process_order(order_id):
                 order_id,
                 "PENDING",
                 "PROCESSING"
-            )
-
-            connection.commit()
-
-            publish_order_notification(
-                order_id=order_id,
-                customer_id=order["customer_id"],
-                previous_status="PENDING",
-                new_status="PROCESSING"
             )
 
             # ----------------------------------------------------
@@ -464,13 +416,6 @@ def process_order(order_id):
 
             connection.commit()
 
-            publish_order_notification(
-                order_id=order_id,
-                customer_id=order["customer_id"],
-                previous_status="PROCESSING",
-                new_status="COMPLETED"
-            )
-
             logger.info(
                 json.dumps(
                     {
@@ -484,7 +429,7 @@ def process_order(order_id):
                 )
             )
 
-            return "COMPLETED", order["customer_id"]
+            return "COMPLETED"
 
     except ValueError as exc:
 
@@ -501,8 +446,6 @@ def process_order(order_id):
 
         connection.rollback()
 
-        failure_customer_id = order["customer_id"]
-
         mark_order_failed(
             order_id,
             str(exc)
@@ -510,13 +453,6 @@ def process_order(order_id):
 
         mark_idempotency_failed(
             order_id
-        )
-
-        publish_order_notification(
-            order_id=order_id,
-            customer_id=failure_customer_id,
-            previous_status="PROCESSING",
-            new_status="FAILED"
         )
 
         publish_event(
@@ -527,7 +463,7 @@ def process_order(order_id):
             }
         )
 
-        return "FAILED", failure_customer_id
+        return "FAILED"
 
     except Exception:
         # Unexpected errors should be retried by SQS.
@@ -572,7 +508,7 @@ def handler(event, context):
                 )
             )
 
-            result, customer_id = process_order(
+            result = process_order(
                 order_id
             )
 
@@ -581,9 +517,7 @@ def handler(event, context):
                 publish_event(
                     "OrderConfirmed",
                     {
-                        "order_id": order_id,
-                        "customer_id": customer_id,
-                        "status": "COMPLETED"
+                        "order_id": order_id
                     }
                 )
 

@@ -93,21 +93,6 @@ Resources:
                     !Sub cloudmart-${Environment}-eventbus-arn
 
         # --------------------------------------------------------
-        # Publish order status notifications
-        # --------------------------------------------------------
-
-        - PolicyName: OrderProcessingSNSPublish
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - sns:Publish
-                Resource:
-                  Fn::ImportValue:
-                    !Sub cloudmart-${Environment}-order-notification-topic-arn
-
-        # --------------------------------------------------------
         # CloudWatch Logs
         # --------------------------------------------------------
 
@@ -156,10 +141,6 @@ Resources:
           DB_PASSWORD_PARAM: !Sub /cloudmart/${Environment}/database/password
 
           EVENT_BUS_NAME: !Sub cloudmart-${Environment}-bus
-
-          ORDER_NOTIFICATION_TOPIC_ARN:
-            Fn::ImportValue:
-              !Sub cloudmart-${Environment}-order-notification-topic-arn
 
       Code:
         S3Bucket:

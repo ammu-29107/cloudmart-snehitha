@@ -9,8 +9,6 @@ Description: >
 Parameters:
   Environment:
     Type: String
-  AlertEmail:
-    Type: String
 
 Resources:
   EventBus:
@@ -29,18 +27,6 @@ Resources:
     Properties:
       LogGroupName: !Sub /cloudmart/${Environment}/events/orders
       RetentionInDays: 14
-
-  OrderNotificationTopic:
-    Type: AWS::SNS::Topic
-    Properties:
-      TopicName: !Sub cloudmart-${Environment}-order-notifications
-
-  OrderEmailSubscription:
-    Type: AWS::SNS::Subscription
-    Properties:
-      TopicArn: !Ref OrderNotificationTopic
-      Protocol: email
-      Endpoint: !Ref AlertEmail
 
   LowStockRule:
     Type: AWS::Events::Rule
@@ -118,8 +104,3 @@ Outputs:
   EventBusName:
     Value: !Ref EventBus
     Export: {Name: !Sub 'cloudmart-${Environment}-eventbus-name'}
-  OrderNotificationTopicArn:
-    Description: Order notification SNS topic ARN
-    Value: !Ref OrderNotificationTopic
-    Export:
-      Name: !Sub cloudmart-${Environment}-order-notification-topic-arn
