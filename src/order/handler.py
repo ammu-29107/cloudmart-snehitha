@@ -15,7 +15,11 @@ logger.setLevel(logging.INFO)
 ssm = boto3.client("ssm")
 sqs = boto3.client("sqs")
 eventbridge = boto3.client("events")
+sns = boto3.client("sns")
 
+ORDER_NOTIFICATION_TOPIC_ARN = os.environ[
+    "ORDER_NOTIFICATION_TOPIC_ARN"
+]
 
 # ================================================================
 # HELPERS
@@ -30,6 +34,41 @@ def log_json(**kwargs):
         )
     )
 
+def publish_order_notification(
+    order_id,
+    customer_id,
+    previous_status,
+    new_status
+):
+    try:
+        sns.publish(
+            TopicArn=ORDER_NOTIFICATION_TOPIC_ARN,
+            Subject=f"CloudMart Order {order_id} Status Update",
+            Message=json.dumps(
+                {
+                    "order_id": order_id,
+                    "customer_id": customer_id,
+                    "previous_status": previous_status,
+                    "new_status": new_status
+                },
+                indent=4
+            )
+        )
+
+    except Exception as exc:
+        logger.error(
+            json.dumps(
+                {
+                    "event": "order_notification_failed",
+                    "order_id": order_id,
+                    "customer_id": customer_id,
+                    "previous_status": previous_status,
+                    "new_status": new_status,
+                    "error": str(exc),
+                    "error_type": type(exc).__name__
+                }
+            )
+        )
 
 def get_ssm_parameter(name, decrypt=False):
 
@@ -670,6 +709,13 @@ def create_order(
 
             conn.commit()
 
+            publish_order_notification(
+                order_id=order_id,
+                customer_id=customer_id,
+                previous_status=None,
+                new_status="PENDING"
+            )
+
 
         # ========================================================
         # SEND ORDER TO SQS
@@ -1155,6 +1201,7 @@ def cancel_order(event):
                 """
                 SELECT
                     order_id,
+                    customer_id,
                     status
                 FROM orders
                 WHERE order_id = %s
@@ -1232,6 +1279,13 @@ def cancel_order(event):
             )
 
             conn.commit()
+
+            publish_order_notification(
+                order_id=order_id,
+                customer_id=order["customer_id"],
+                previous_status="PENDING",
+                new_status="CANCELLED"
+            )
 
         eventbridge.put_events(
             Entries=[
