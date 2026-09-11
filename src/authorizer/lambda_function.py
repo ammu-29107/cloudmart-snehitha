@@ -122,8 +122,7 @@ def is_allowed(role, method, path):
         permissions = {
             "CUSTOMER": {
                 "GET",
-                "POST",
-                "PUT"
+                "POST"
             },
 
             "PRODUCT_OWNER": set(),

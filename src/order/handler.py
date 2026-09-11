@@ -971,6 +971,107 @@ def get_order_by_id(event):
 
 
 # ================================================================
+# GET ORDERS BY CUSTOMER
+# ================================================================
+
+def get_orders_by_customer(event):
+
+    query_parameters = (
+        event.get("queryStringParameters")
+        or {}
+    )
+
+    customer_id = query_parameters.get(
+        "customerId"
+    )
+
+    if not customer_id:
+
+        return respond(
+            400,
+            {
+                "success": False,
+                "message": "customerId is required."
+            }
+        )
+
+    try:
+
+        customer_id = int(customer_id)
+
+    except ValueError:
+
+        return respond(
+            400,
+            {
+                "success": False,
+                "message": "customerId must be an integer."
+            }
+        )
+
+    conn = None
+
+    try:
+
+        conn = get_db_connection()
+
+        with conn.cursor() as cursor:
+
+            cursor.execute(
+                """
+                SELECT
+                    order_id,
+                    customer_id,
+                    shipping_address_id,
+                    billing_address_id,
+                    status,
+                    total_amount,
+                    created_at,
+                    updated_at
+                FROM orders
+                WHERE customer_id = %s
+                ORDER BY created_at DESC
+                """,
+                (customer_id,)
+            )
+
+            orders = cursor.fetchall()
+
+        return respond(
+            200,
+            {
+                "success": True,
+                "data": orders
+            }
+        )
+
+    except Exception as exc:
+
+        if conn:
+            conn.rollback()
+
+        log_json(
+            event="get_customer_orders_failed",
+            customer_id=customer_id,
+            error=str(exc),
+            error_type=type(exc).__name__
+        )
+
+        return respond(
+            500,
+            {
+                "success": False,
+                "message": "Unable to retrieve customer orders."
+            }
+        )
+
+    finally:
+
+        if conn:
+            conn.close()
+
+
+# ================================================================
 # ROUTER
 # ================================================================
 
@@ -1039,6 +1140,13 @@ def handler(event, context):
         ):
 
             return get_order_by_id(event)
+
+        if (
+            method == "GET"
+            and path == "/orders"
+        ):
+
+            return get_orders_by_customer(event)
 
         return respond(
 
