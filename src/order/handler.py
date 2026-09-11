@@ -1072,6 +1072,211 @@ def get_orders_by_customer(event):
 
 
 # ================================================================
+# CANCEL ORDER
+# ================================================================
+
+def cancel_order(event):
+
+    path_parameters = event.get("pathParameters") or {}
+
+    order_id = path_parameters.get("orderId")
+
+    if not order_id:
+
+        path = (
+            event.get("rawPath")
+            or event.get("path")
+            or ""
+        )
+
+        path_parts = path.strip("/").split("/")
+
+        if (
+            len(path_parts) == 2
+            and path_parts[0] == "orders"
+        ):
+            order_id = path_parts[1]
+
+    if not order_id:
+
+        return respond(
+            400,
+            {
+                "success": False,
+                "message": "Order ID is required."
+            }
+        )
+
+    try:
+
+        order_id = int(order_id)
+
+    except ValueError:
+
+        return respond(
+            400,
+            {
+                "success": False,
+                "message": "Order ID must be an integer."
+            }
+        )
+
+    body = parse_body(event)
+
+    if body is None:
+
+        return respond(
+            400,
+            {
+                "success": False,
+                "message": "Request body must contain valid JSON."
+            }
+        )
+
+    if body.get("status") != "CANCELLED":
+
+        return respond(
+            400,
+            {
+                "success": False,
+                "message": "Only order cancellation is supported."
+            }
+        )
+
+    conn = None
+
+    try:
+
+        conn = get_db_connection()
+
+        with conn.cursor() as cursor:
+
+            cursor.execute(
+                """
+                SELECT
+                    order_id,
+                    status
+                FROM orders
+                WHERE order_id = %s
+                FOR UPDATE
+                """,
+                (order_id,)
+            )
+
+            order = cursor.fetchone()
+
+            if not order:
+
+                conn.rollback()
+
+                return respond(
+                    404,
+                    {
+                        "success": False,
+                        "message": "Order not found."
+                    }
+                )
+
+            if order["status"] != "PENDING":
+
+                conn.rollback()
+
+                return respond(
+                    400,
+                    {
+                        "success": False,
+                        "message": (
+                            "Only PENDING orders can be cancelled."
+                        )
+                    }
+                )
+
+            cursor.execute(
+                """
+                UPDATE orders
+                SET
+                    status = %s,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE order_id = %s
+                """,
+                (
+                    "CANCELLED",
+                    order_id
+                )
+            )
+
+            cursor.execute(
+                """
+                INSERT INTO order_status_history
+                (
+                    order_id,
+                    previous_status,
+                    new_status
+                )
+                VALUES (%s, %s, %s)
+                """,
+                (
+                    order_id,
+                    "PENDING",
+                    "CANCELLED"
+                )
+            )
+
+            cursor.execute(
+                """
+                UPDATE idempotency_keys
+                SET status = 'CANCELLED'
+                WHERE order_id = %s
+                """,
+                (order_id,)
+            )
+
+            conn.commit()
+
+        log_json(
+            event="order_cancelled",
+            order_id=order_id
+        )
+
+        return respond(
+            200,
+            {
+                "success": True,
+                "message": "Order cancelled successfully.",
+                "data": {
+                    "order_id": order_id,
+                    "status": "CANCELLED"
+                }
+            }
+        )
+
+    except Exception as exc:
+
+        if conn:
+            conn.rollback()
+
+        log_json(
+            event="order_cancellation_failed",
+            order_id=order_id,
+            error=str(exc),
+            error_type=type(exc).__name__
+        )
+
+        return respond(
+            500,
+            {
+                "success": False,
+                "message": "Unable to cancel order."
+            }
+        )
+
+    finally:
+
+        if conn:
+            conn.close()
+
+
+# ================================================================
 # ROUTER
 # ================================================================
 
@@ -1135,6 +1340,13 @@ def handler(event, context):
             return create_order(event)
 
         if (
+            method == "PATCH"
+            and path.startswith("/orders/")
+        ):
+
+            return cancel_order(event)
+
+        if (
             method == "GET"
             and path.startswith("/orders/")
         ):
@@ -1147,6 +1359,7 @@ def handler(event, context):
         ):
 
             return get_orders_by_customer(event)
+
 
         return respond(
 

@@ -164,7 +164,7 @@ DDL_STATEMENTS = [
     CREATE TABLE IF NOT EXISTS idempotency_keys (
       idempotency_key VARCHAR(64) PRIMARY KEY,
       order_id INT NOT NULL,
-      status ENUM('IN_PROGRESS','COMPLETED', 'FAILED') NOT NULL,
+      status ENUM('IN_PROGRESS','COMPLETED', 'FAILED', 'CANCELLED') NOT NULL,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (order_id) REFERENCES orders(order_id)
     )
@@ -285,6 +285,19 @@ SAMPLE_DATA_STATEMENTS = [
     """
 ]
 
+# Database migrations.
+IDEMPOTENCY_MIGRATION_STATEMENTS = [
+    """
+    ALTER TABLE idempotency_keys
+    MODIFY COLUMN status ENUM(
+      'IN_PROGRESS',
+      'COMPLETED',
+      'FAILED',
+      'CANCELLED'
+    ) NOT NULL
+    """
+]
+
 
 def get_ssm_parameter(name, with_decryption=False):
     """
@@ -353,6 +366,14 @@ def lambda_handler(event, context):
                 applied.append(
                     stmt.strip().split("\n")[0]
                 )
+
+            # ====================================================
+            # APPLY DATABASE MIGRATIONS
+            # ====================================================
+
+            for stmt in IDEMPOTENCY_MIGRATION_STATEMENTS:
+
+                cur.execute(stmt)
 
             # ====================================================
             # INSERT SAMPLE DATA
