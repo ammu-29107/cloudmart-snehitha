@@ -22,6 +22,10 @@ Parameters:
   OrderCodeKey:
     Type: String
 
+  SesSenderEmail:
+    Type: String
+    Description: Verified SES sender email address.
+
 
 # ================================================================
 # RESOURCES
@@ -181,10 +185,10 @@ Resources:
 
 
         # --------------------------------------------------------
-        # SNS ORDER NOTIFICATIONS
+        # SES ORDER NOTIFICATIONS
         # --------------------------------------------------------
 
-        - PolicyName: OrderSNSPublish
+        - PolicyName: OrderSESSendEmail
 
           PolicyDocument:
 
@@ -195,11 +199,9 @@ Resources:
               - Effect: Allow
 
                 Action:
-                  - sns:Publish
+                  - ses:SendEmail
 
-                Resource:
-                  - Fn::ImportValue:
-                      !Sub cloudmart-${Environment}-order-notification-topic-arn
+                Resource: "*"
 
 
         # --------------------------------------------------------
@@ -321,11 +323,10 @@ Resources:
             !Sub cloudmart-${Environment}-bus
 
 
-          # SNS ORDER NOTIFICATIONS
+          # SES ORDER NOTIFICATIONS
 
-          ORDER_NOTIFICATION_TOPIC_ARN:
-            Fn::ImportValue:
-              !Sub cloudmart-${Environment}-order-notification-topic-arn
+          SES_SENDER_EMAIL:
+            !Ref SesSenderEmail
 
 
 # ================================================================

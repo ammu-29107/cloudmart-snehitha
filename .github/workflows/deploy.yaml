@@ -2333,6 +2333,7 @@ jobs:
             --parameters \
               ParameterKey=Environment,ParameterValue=dev \
               ParameterKey=OrderCodeKey,ParameterValue=dev/order/order-${{ github.sha }}.zip \
+              ParameterKey=SesSenderEmail,ParameterValue="${{ secrets.SES_SENDER_EMAIL }}" \
             --capabilities CAPABILITY_NAMED_IAM
 
 
@@ -2761,6 +2762,7 @@ jobs:
             --parameters \
               ParameterKey=Environment,ParameterValue=dev \
               ParameterKey=OrderProcessingCodeKey,ParameterValue=dev/order-processing/order-processing-${{ github.sha }}.zip \
+              ParameterKey=SesSenderEmail,ParameterValue="${{ secrets.SES_SENDER_EMAIL }}" \
             --capabilities CAPABILITY_NAMED_IAM
 
 

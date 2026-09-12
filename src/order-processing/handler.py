@@ -11,7 +11,7 @@ logger.setLevel(logging.INFO)
 
 ssm = boto3.client("ssm")
 events = boto3.client("events")
-sns = boto3.client("sns")
+ses = boto3.client("sesv2")
 
 
 DB_HOST_PARAM = os.environ["DB_HOST_PARAM"]
@@ -19,8 +19,8 @@ DB_NAME_PARAM = os.environ["DB_NAME_PARAM"]
 DB_USER_PARAM = os.environ["DB_USER_PARAM"]
 DB_PASSWORD_PARAM = os.environ["DB_PASSWORD_PARAM"]
 EVENT_BUS_NAME = os.environ["EVENT_BUS_NAME"]
-ORDER_NOTIFICATION_TOPIC_ARN = os.environ[
-    "ORDER_NOTIFICATION_TOPIC_ARN"
+SES_SENDER_EMAIL = os.environ[
+    "SES_SENDER_EMAIL"
 ]
 
 
@@ -71,22 +71,39 @@ def publish_event(detail_type, detail):
 def publish_order_notification(
     order_id,
     customer_id,
+    customer_email,
     previous_status,
     new_status
 ):
     try:
-        sns.publish(
-            TopicArn=ORDER_NOTIFICATION_TOPIC_ARN,
-            Subject=f"CloudMart Order {order_id} Status Update",
-            Message=json.dumps(
-                {
-                    "order_id": order_id,
-                    "customer_id": customer_id,
-                    "previous_status": previous_status,
-                    "new_status": new_status
-                },
-                indent=4
-            )
+        ses.send_email(
+            FromEmailAddress=SES_SENDER_EMAIL,
+            Destination={
+                "ToAddresses": [customer_email]
+            },
+            Content={
+                "Simple": {
+                    "Subject": {
+                        "Data": (
+                            f"CloudMart Order "
+                            f"{order_id} Status Update"
+                        )
+                    },
+                    "Body": {
+                        "Text": {
+                            "Data": json.dumps(
+                                {
+                                    "order_id": order_id,
+                                    "customer_id": customer_id,
+                                    "previous_status": previous_status,
+                                    "new_status": new_status
+                                },
+                                indent=4
+                            )
+                        }
+                    }
+                }
+            }
         )
 
     except Exception as exc:
@@ -306,6 +323,25 @@ def process_order(order_id):
                 connection.rollback()
                 return "IGNORED", order["customer_id"]
 
+            cursor.execute(
+                """
+                SELECT
+                    email
+                FROM customers
+                WHERE customer_id = %s
+                """,
+                (order["customer_id"],)
+            )
+
+            customer = cursor.fetchone()
+
+            if not customer:
+                raise ValueError(
+                    f"Customer {order['customer_id']} not found."
+                )
+
+            customer_email = customer["email"]
+
             # ----------------------------------------------------
             # PENDING -> PROCESSING
             # ----------------------------------------------------
@@ -331,6 +367,7 @@ def process_order(order_id):
             publish_order_notification(
                 order_id=order_id,
                 customer_id=order["customer_id"],
+                customer_email=customer_email,
                 previous_status="PENDING",
                 new_status="PROCESSING"
             )
@@ -467,6 +504,7 @@ def process_order(order_id):
             publish_order_notification(
                 order_id=order_id,
                 customer_id=order["customer_id"],
+                customer_email=customer_email,
                 previous_status="PROCESSING",
                 new_status="COMPLETED"
             )
@@ -515,6 +553,7 @@ def process_order(order_id):
         publish_order_notification(
             order_id=order_id,
             customer_id=failure_customer_id,
+            customer_email=customer_email,
             previous_status="PROCESSING",
             new_status="FAILED"
         )

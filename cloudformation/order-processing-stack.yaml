@@ -17,6 +17,10 @@ Parameters:
     Type: String
     Description: S3 key for the order processing Lambda deployment package.
 
+  SesSenderEmail:
+    Type: String
+    Description: Verified SES sender email address.
+
 
 Resources:
 
@@ -93,19 +97,17 @@ Resources:
                     !Sub cloudmart-${Environment}-eventbus-arn
 
         # --------------------------------------------------------
-        # Publish order status notifications
+        # Send order status notifications through SES
         # --------------------------------------------------------
 
-        - PolicyName: OrderProcessingSNSPublish
+        - PolicyName: OrderProcessingSESSendEmail
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
               - Effect: Allow
                 Action:
-                  - sns:Publish
-                Resource:
-                  Fn::ImportValue:
-                    !Sub cloudmart-${Environment}-order-notification-topic-arn
+                  - ses:SendEmail
+                Resource: "*"
 
         # --------------------------------------------------------
         # CloudWatch Logs
@@ -157,9 +159,7 @@ Resources:
 
           EVENT_BUS_NAME: !Sub cloudmart-${Environment}-bus
 
-          ORDER_NOTIFICATION_TOPIC_ARN:
-            Fn::ImportValue:
-              !Sub cloudmart-${Environment}-order-notification-topic-arn
+          SES_SENDER_EMAIL: !Ref SesSenderEmail
 
       Code:
         S3Bucket:
