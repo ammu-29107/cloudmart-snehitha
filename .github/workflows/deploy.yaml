@@ -1012,6 +1012,21 @@ jobs:
 
           fi
 
+      - name: Verify ALERT_EMAIL secret is available
+        run: |
+          if [ -z "${{ secrets.ALERT_EMAIL }}" ]; then
+            echo "ERROR: ALERT_EMAIL secret is empty or unavailable."
+            exit 1
+          fi
+          echo "ALERT_EMAIL secret is available."
+
+      - name: Verify SES_SENDER_EMAIL secret is available
+        run: |
+          if [ -z "${{ secrets.SES_SENDER_EMAIL }}" ]; then
+            echo "ERROR: SES_SENDER_EMAIL secret is empty or unavailable."
+            exit 1
+          fi
+          echo "SES_SENDER_EMAIL secret is available."
 
       - name: Create change set
 
@@ -1030,6 +1045,7 @@ jobs:
             --template-body "file://$TEMPLATE_FILE" \
             --parameters \
               ParameterKey=Environment,ParameterValue=dev \
+              ParameterKey=SesSenderEmail,ParameterValue="${{ secrets.SES_SENDER_EMAIL }}" \
             --capabilities CAPABILITY_NAMED_IAM
 
 
@@ -2333,6 +2349,7 @@ jobs:
             --parameters \
               ParameterKey=Environment,ParameterValue=dev \
               ParameterKey=OrderCodeKey,ParameterValue=dev/order/order-${{ github.sha }}.zip \
+              ParameterKey=AlertEmail,ParameterValue="${{ secrets.ALERT_EMAIL }}" \
               ParameterKey=SesSenderEmail,ParameterValue="${{ secrets.SES_SENDER_EMAIL }}" \
             --capabilities CAPABILITY_NAMED_IAM
 
