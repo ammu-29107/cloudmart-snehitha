@@ -216,6 +216,18 @@ Resources:
       SubnetIds: [!Ref PrivateSubnetA]
       SecurityGroupIds: [!Ref SgVpce]
 
+  SesInterfaceEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.email
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds:
+        - !Ref PrivateSubnetA
+      SecurityGroupIds:
+        - !Ref SgVpce
+
   SqsInterfaceEndpoint:
     Type: AWS::EC2::VPCEndpoint
     Properties:
