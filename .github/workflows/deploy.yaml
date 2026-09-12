@@ -2319,6 +2319,14 @@ jobs:
           esac
 
 
+      - name: Verify SES_SENDER_EMAIL secret is available
+        run: |
+          if [ -z "${{ secrets.SES_SENDER_EMAIL }}" ]; then
+            echo "ERROR: SES_SENDER_EMAIL secret is empty or unavailable."
+            exit 1
+          fi
+          echo "SES_SENDER_EMAIL secret is available."
+
       # ========================================================
       # CREATE CHANGE SET
       # ========================================================
@@ -2341,7 +2349,6 @@ jobs:
             --parameters \
               ParameterKey=Environment,ParameterValue=dev \
               ParameterKey=OrderCodeKey,ParameterValue=dev/order/order-${{ github.sha }}.zip \
-              ParameterKey=AlertEmail,ParameterValue="${{ secrets.ALERT_EMAIL }}" \
               ParameterKey=SesSenderEmail,ParameterValue="${{ secrets.SES_SENDER_EMAIL }}" \
             --capabilities CAPABILITY_NAMED_IAM
 
