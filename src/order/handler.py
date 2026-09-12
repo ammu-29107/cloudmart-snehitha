@@ -1222,7 +1222,8 @@ def cancel_order(event):
                 SELECT
                     order_id,
                     customer_id,
-                    status
+                    status,
+                    created_at
                 FROM orders
                 WHERE order_id = %s
                 FOR UPDATE
@@ -1255,6 +1256,34 @@ def cancel_order(event):
                         "message": (
                             "Only PENDING orders can be cancelled."
                         )
+                    }
+                )
+
+            cursor.execute(
+                """
+                SELECT
+                    TIMESTAMPDIFF(
+                        SECOND,
+                        created_at,
+                        CURRENT_TIMESTAMP
+                    ) AS age_seconds
+                FROM orders
+                WHERE order_id = %s
+                """,
+                (order_id,)
+            )
+
+            order_age = cursor.fetchone()["age_seconds"]
+
+            if order_age > 15:
+
+                conn.rollback()
+
+                return respond(
+                    400,
+                    {
+                        "success": False,
+                        "message": "Order can no longer be cancelled."
                     }
                 )
 
