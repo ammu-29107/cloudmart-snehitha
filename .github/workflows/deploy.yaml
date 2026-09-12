@@ -1020,14 +1020,6 @@ jobs:
           fi
           echo "ALERT_EMAIL secret is available."
 
-      - name: Verify SES_SENDER_EMAIL secret is available
-        run: |
-          if [ -z "${{ secrets.SES_SENDER_EMAIL }}" ]; then
-            echo "ERROR: SES_SENDER_EMAIL secret is empty or unavailable."
-            exit 1
-          fi
-          echo "SES_SENDER_EMAIL secret is available."
-
       - name: Create change set
 
         run: |
@@ -1045,7 +1037,7 @@ jobs:
             --template-body "file://$TEMPLATE_FILE" \
             --parameters \
               ParameterKey=Environment,ParameterValue=dev \
-              ParameterKey=SesSenderEmail,ParameterValue="${{ secrets.SES_SENDER_EMAIL }}" \
+              ParameterKey=AlertEmail,ParameterValue="${{ secrets.ALERT_EMAIL }}" \
             --capabilities CAPABILITY_NAMED_IAM
 
 
