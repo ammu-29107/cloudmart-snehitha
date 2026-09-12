@@ -269,9 +269,17 @@ def process_order(order_id):
             order = cursor.fetchone()
 
             if not order:
-                raise RuntimeError(
-                    "Intentional DLQ test failure."
+                logger.error(
+                    json.dumps(
+                        {
+                            "event": "order_not_found",
+                            "order_id": order_id
+                        }
+                    )
                 )
+
+                connection.rollback()
+                return "IGNORED", None
 
             current_status = order["status"]
 
