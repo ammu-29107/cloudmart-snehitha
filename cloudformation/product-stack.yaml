@@ -88,6 +88,24 @@ Resources:
                   - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudmart/${Environment}/auth/product-owner-token
                   - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudmart/${Environment}/auth/admin-token 
 
+        # --------------------------------------------------------
+        # SSM DATABASE PARAMETERS
+        # --------------------------------------------------------
+
+        - PolicyName: AuthorizerDatabaseRead
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                Resource:
+                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudmart/${Environment}/database/host
+                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudmart/${Environment}/database/name
+                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudmart/${Environment}/database/username
+                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudmart/${Environment}/database/password
+
 
         # --------------------------------------------------------
         # CLOUDWATCH LOGGING
@@ -192,6 +210,18 @@ Resources:
           ORDER_FUNCTION_NAME:
             Fn::ImportValue:
               !Sub cloudmart-${Environment}-order-lambda-name
+
+          DB_HOST_PARAM:
+            !Sub /cloudmart/${Environment}/database/host
+
+          DB_NAME_PARAM:
+            !Sub /cloudmart/${Environment}/database/name
+
+          DB_USER_PARAM:
+            !Sub /cloudmart/${Environment}/database/username
+
+          DB_PASSWORD_PARAM:
+            !Sub /cloudmart/${Environment}/database/password
 
 
   # ==============================================================

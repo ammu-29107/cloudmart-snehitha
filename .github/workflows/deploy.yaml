@@ -1216,17 +1216,6 @@ jobs:
       # AUTHENTICATION TOKENS
       # ========================================================
 
-      - name: Write customer token SecureString
-
-        run: |
-
-          aws ssm put-parameter \
-            --name "/cloudmart/dev/auth/customer-token" \
-            --type SecureString \
-            --value "${{ secrets.CLOUDMART_CUSTOMER_TOKEN }}" \
-            --overwrite
-
-
       - name: Write product owner token SecureString
 
         run: |
@@ -1363,6 +1352,9 @@ jobs:
           cp src/authorizer/lambda_function.py \
             build/authorizer/lambda_function.py
 
+          pip install pymysql \
+            -t build/authorizer \
+            --break-system-packages
 
           cd build/authorizer
 
@@ -2082,7 +2074,7 @@ jobs:
             -o /tmp/customer-product-response.txt \
             -w "%{http_code}" \
             --max-time 30 \
-            -H "X-CloudMart-Token: ${{ secrets.CLOUDMART_CUSTOMER_TOKEN }}" \
+            -H "X-CloudMart-Token: cm-customer-1-demo-9f7K2x" \
             "$URL")
 
 

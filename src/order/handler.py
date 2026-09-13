@@ -426,6 +426,24 @@ def get_order_items(
     return prepared_items, total_amount
 
 
+def get_authorizer_context(event):
+
+    request_context = (
+        event.get("requestContext")
+        or {}
+    )
+
+    authorizer_context = (
+        request_context.get("authorizer")
+        or {}
+    )
+
+    return (
+        authorizer_context.get("role"),
+        authorizer_context.get("customer_id")
+    )
+
+
 # ================================================================
 # IDEMPOTENCY
 # ================================================================
@@ -484,7 +502,33 @@ def create_order(
         )
 
 
+    role, authenticated_customer_id = get_authorizer_context(
+        event
+    )
+
     customer_id = body["customer_id"]
+
+    if role == "CUSTOMER":
+
+        if authenticated_customer_id is None:
+
+            return respond(
+                401,
+                {
+                    "success": False,
+                    "message": "Customer identity could not be determined."
+                }
+            )
+
+        if customer_id != authenticated_customer_id:
+
+            return respond(
+                403,
+                {
+                    "success": False,
+                    "message": "You can only create an order for your own customer account."
+                }
+            )
 
     shipping_address_id = body[
         "shipping_address_id"
@@ -938,28 +982,57 @@ def get_order_by_id(event):
 
     conn = None
 
+    role, authenticated_customer_id = get_authorizer_context(
+        event
+    )
+
     try:
 
         conn = get_db_connection()
 
         with conn.cursor() as cursor:
 
-            cursor.execute(
-                """
-                SELECT
-                    order_id,
-                    customer_id,
-                    shipping_address_id,
-                    billing_address_id,
-                    status,
-                    total_amount,
-                    created_at,
-                    updated_at
-                FROM orders
-                WHERE order_id = %s
-                """,
-                (order_id,)
-            )
+            if role == "CUSTOMER":
+
+                cursor.execute(
+                    """
+                    SELECT
+                        order_id,
+                        customer_id,
+                        shipping_address_id,
+                        billing_address_id,
+                        status,
+                        total_amount,
+                        created_at,
+                        updated_at
+                    FROM orders
+                    WHERE order_id = %s
+                    AND customer_id = %s
+                    """,
+                    (
+                        order_id,
+                        authenticated_customer_id
+                    )
+                )
+
+            else:
+
+                cursor.execute(
+                    """
+                    SELECT
+                        order_id,
+                        customer_id,
+                        shipping_address_id,
+                        billing_address_id,
+                        status,
+                        total_amount,
+                        created_at,
+                        updated_at
+                    FROM orders
+                    WHERE order_id = %s
+                    """,
+                    (order_id,)
+                )
 
             order = cursor.fetchone()
 
@@ -1042,38 +1115,60 @@ def get_order_by_id(event):
 
 def get_orders_by_customer(event):
 
+    role, authenticated_customer_id = get_authorizer_context(
+        event
+    )
+
     query_parameters = (
         event.get("queryStringParameters")
         or {}
     )
 
-    customer_id = query_parameters.get(
+    requested_customer_id = query_parameters.get(
         "customerId"
     )
 
-    if not customer_id:
+    if role == "CUSTOMER":
 
-        return respond(
-            400,
-            {
-                "success": False,
-                "message": "customerId is required."
-            }
-        )
+        if authenticated_customer_id is None:
 
-    try:
+            return respond(
+                401,
+                {
+                    "success": False,
+                    "message": "Customer identity could not be determined."
+                }
+            )
 
-        customer_id = int(customer_id)
+        customer_id = authenticated_customer_id
 
-    except ValueError:
+    else:
 
-        return respond(
-            400,
-            {
-                "success": False,
-                "message": "customerId must be an integer."
-            }
-        )
+        if not requested_customer_id:
+
+            return respond(
+                400,
+                {
+                    "success": False,
+                    "message": "customerId is required."
+                }
+            )
+
+        try:
+
+            customer_id = int(
+                requested_customer_id
+            )
+
+        except ValueError:
+
+            return respond(
+                400,
+                {
+                    "success": False,
+                    "message": "customerId must be an integer."
+                }
+            )
 
     conn = None
 
@@ -1211,25 +1306,51 @@ def cancel_order(event):
 
     conn = None
 
+    role, authenticated_customer_id = get_authorizer_context(
+        event
+    )
+
     try:
 
         conn = get_db_connection()
 
         with conn.cursor() as cursor:
 
-            cursor.execute(
-                """
-                SELECT
-                    order_id,
-                    customer_id,
-                    status,
-                    created_at
-                FROM orders
-                WHERE order_id = %s
-                FOR UPDATE
-                """,
-                (order_id,)
-            )
+            if role == "CUSTOMER":
+
+                cursor.execute(
+                    """
+                    SELECT
+                        order_id,
+                        customer_id,
+                        status,
+                        created_at
+                    FROM orders
+                    WHERE order_id = %s
+                    AND customer_id = %s
+                    FOR UPDATE
+                    """,
+                    (
+                        order_id,
+                        authenticated_customer_id
+                    )
+                )
+
+            else:
+
+                cursor.execute(
+                    """
+                    SELECT
+                        order_id,
+                        customer_id,
+                        status,
+                        created_at
+                    FROM orders
+                    WHERE order_id = %s
+                    FOR UPDATE
+                    """,
+                    (order_id,)
+                )
 
             order = cursor.fetchone()
 

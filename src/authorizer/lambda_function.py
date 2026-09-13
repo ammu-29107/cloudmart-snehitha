@@ -4,6 +4,7 @@ import os
 import secrets
 
 import boto3
+import pymysql
 
 
 logger = logging.getLogger()
@@ -14,12 +15,16 @@ ssm = boto3.client("ssm")
 lambda_client = boto3.client("lambda")
 
 
-CUSTOMER_TOKEN_PARAM = os.environ["CUSTOMER_TOKEN_PARAM"]
 PRODUCT_OWNER_TOKEN_PARAM = os.environ["PRODUCT_OWNER_TOKEN_PARAM"]
 ADMIN_TOKEN_PARAM = os.environ["ADMIN_TOKEN_PARAM"]
 
 PRODUCT_FUNCTION_NAME = os.environ["PRODUCT_FUNCTION_NAME"]
 ORDER_FUNCTION_NAME = os.environ["ORDER_FUNCTION_NAME"]
+
+DB_HOST_PARAM = os.environ["DB_HOST_PARAM"]
+DB_NAME_PARAM = os.environ["DB_NAME_PARAM"]
+DB_USER_PARAM = os.environ["DB_USER_PARAM"]
+DB_PASSWORD_PARAM = os.environ["DB_PASSWORD_PARAM"]
 
 ENVIRONMENT = os.environ.get(
     "ENVIRONMENT",
@@ -38,11 +43,61 @@ def response(status_code, body):
     }
 
 
+def get_customer_id(credential_id):
+
+    parameters = ssm.get_parameters(
+        Names=[
+            DB_HOST_PARAM,
+            DB_NAME_PARAM,
+            DB_USER_PARAM,
+            DB_PASSWORD_PARAM
+        ],
+        WithDecryption=True
+    )
+
+    db_parameters = {}
+
+    for parameter in parameters["Parameters"]:
+        db_parameters[parameter["Name"]] = parameter["Value"]
+
+    connection = pymysql.connect(
+        host=db_parameters[DB_HOST_PARAM],
+        user=db_parameters[DB_USER_PARAM],
+        password=db_parameters[DB_PASSWORD_PARAM],
+        database=db_parameters[DB_NAME_PARAM],
+        cursorclass=pymysql.cursors.DictCursor,
+        connect_timeout=5
+    )
+
+    try:
+
+        with connection.cursor() as cursor:
+
+            cursor.execute(
+                """
+                SELECT customer_id
+                FROM customer_credentials
+                WHERE credential_id = %s
+                """,
+                (credential_id,)
+            )
+
+            result = cursor.fetchone()
+
+            if result:
+                return result["customer_id"]
+
+            return None
+
+    finally:
+
+        connection.close()
+
+
 def get_role(supplied_token):
 
     parameters = ssm.get_parameters(
         Names=[
-            CUSTOMER_TOKEN_PARAM,
             PRODUCT_OWNER_TOKEN_PARAM,
             ADMIN_TOKEN_PARAM
         ],
@@ -56,10 +111,7 @@ def get_role(supplied_token):
         name = parameter["Name"]
         value = parameter["Value"]
 
-        if name == CUSTOMER_TOKEN_PARAM:
-            token_roles["CUSTOMER"] = value
-
-        elif name == PRODUCT_OWNER_TOKEN_PARAM:
+        if name == PRODUCT_OWNER_TOKEN_PARAM:
             token_roles["PRODUCT_OWNER"] = value
 
         elif name == ADMIN_TOKEN_PARAM:
@@ -71,9 +123,14 @@ def get_role(supplied_token):
             supplied_token,
             expected_token
         ):
-            return role
+            return role, None
 
-    return None
+    customer_id = get_customer_id(supplied_token)
+
+    if customer_id is not None:
+        return "CUSTOMER", customer_id
+
+    return None, None
 
 
 def is_supported_path(path):
@@ -314,7 +371,7 @@ def lambda_handler(event, context):
         # IDENTIFY ROLE
         # ========================================================
 
-        role = get_role(supplied_token)
+        role, customer_id = get_role(supplied_token)
 
         if role is None:
 
@@ -338,6 +395,13 @@ def lambda_handler(event, context):
                     }
                 }
             )
+
+        request_context["authorizer"] = {
+            "role": role,
+            "customer_id": customer_id
+        }
+
+        event["requestContext"] = request_context
 
         logger.info(
             json.dumps(
