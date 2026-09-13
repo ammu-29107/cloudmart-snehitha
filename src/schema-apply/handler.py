@@ -37,6 +37,14 @@ DDL_STATEMENTS = [
     """,
 
     """
+    CREATE TABLE IF NOT EXISTS customer_credentials (
+      credential_id VARCHAR(255) PRIMARY KEY,
+      customer_id INT NOT NULL,
+      FOREIGN KEY (customer_id) REFERENCES customers(customer_id)
+    )
+    """,
+
+    """
     CREATE TABLE IF NOT EXISTS addresses (
       address_id INT AUTO_INCREMENT PRIMARY KEY,
       customer_id INT NOT NULL,
@@ -244,6 +252,17 @@ SAMPLE_DATA_STATEMENTS = [
       'test.customer@cloudmart.local',
       '9876543210',
       'ACTIVE'
+    )
+    """,
+
+    """
+    INSERT IGNORE INTO customer_credentials (
+      credential_id,
+      customer_id
+    )
+    VALUES (
+      'cm-customer-1-demo-9f7K2x',
+      1
     )
     """,
 
