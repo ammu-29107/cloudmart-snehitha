@@ -371,54 +371,29 @@ def lambda_handler(event, context):
             or headers.get("x-cloudmart-token")
         )
 
-        if not supplied_token:
+        supplied_token = (
+            supplied_token.strip()
+            if supplied_token
+            else None
+        )
 
-            if method == "POST" and path == "/customers":
+        if method == "POST" and path == "/customers" and not supplied_token:
 
-                request_context["authorizer"] = {
-                    "role": "PUBLIC",
-                    "customer_id": None
-                }
+            role = "PUBLIC"
+            customer_id = None
 
-                event["requestContext"] = request_context
-
-                logger.info(
-                    json.dumps(
-                        {
-                            "request_id": request_id,
-                            "event": "public_customer_registration",
-                            "method": method,
-                            "path": path
-                        }
-                    )
-                )
-
-            else:
-
-                logger.info(
-                    json.dumps(
-                        {
-                            "request_id": request_id,
-                            "event": "authorization_failed",
-                            "reason": "missing_token"
-                        }
-                    )
-                )
-
-                return response(
-                    401,
+            logger.info(
+                json.dumps(
                     {
-                        "authorized": False,
-                        "error": {
-                            "code": "UNAUTHORIZED",
-                            "message": "Authentication is required."
-                        }
+                        "request_id": request_id,
+                        "event": "public_customer_registration",
+                        "method": method,
+                        "path": path
                     }
                 )
+            )
 
-        supplied_token = supplied_token.strip() if supplied_token else None
-
-        if not supplied_token and role != "PUBLIC":
+        elif not supplied_token:
 
             logger.info(
                 json.dumps(
@@ -436,38 +411,12 @@ def lambda_handler(event, context):
                     "authorized": False,
                     "error": {
                         "code": "UNAUTHORIZED",
-                        "message": "Invalid authentication credentials."
+                        "message": "Authentication is required."
                     }
                 }
             )
-        
 
-        if supplied_token:
-
-            supplied_token = supplied_token.strip()
-
-            if not supplied_token:
-
-                logger.info(
-                    json.dumps(
-                        {
-                            "request_id": request_id,
-                            "event": "authorization_failed",
-                            "reason": "missing_token"
-                        }
-                    )
-                )
-
-                return response(
-                    401,
-                    {
-                        "authorized": False,
-                        "error": {
-                            "code": "UNAUTHORIZED",
-                            "message": "Invalid authentication credentials."
-                        }
-                    }
-                )
+        else:
 
             role, customer_id = get_role(supplied_token)
 
@@ -493,34 +442,6 @@ def lambda_handler(event, context):
                         }
                     }
                 )
-
-        else:
-
-            role = "PUBLIC"
-            customer_id = None
-
-        if role is None:
-
-            logger.info(
-                json.dumps(
-                    {
-                        "request_id": request_id,
-                        "event": "authorization_failed",
-                        "reason": "invalid_token"
-                    }
-                )
-            )
-
-            return response(
-                401,
-                {
-                    "authorized": False,
-                    "error": {
-                        "code": "UNAUTHORIZED",
-                        "message": "Invalid authentication credentials."
-                    }
-                }
-            )
 
         request_context["authorizer"] = {
             "role": role,
