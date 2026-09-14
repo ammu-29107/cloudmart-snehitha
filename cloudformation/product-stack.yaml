@@ -31,6 +31,9 @@ Parameters:
   SchemaApplyCodeKey:
     Type: String
 
+  CustomerLambdaCodeKey:
+    Type: String
+
   AlertEmail:
     Type: String
 
@@ -142,6 +145,7 @@ Resources:
                   - !GetAtt ProductLambda.Arn
                   - Fn::ImportValue:
                       !Sub cloudmart-${Environment}-order-lambda-arn
+                  - !GetAtt CustomerLambda.Arn
 
 
   # ==============================================================
@@ -211,6 +215,9 @@ Resources:
           ORDER_FUNCTION_NAME:
             Fn::ImportValue:
               !Sub cloudmart-${Environment}-order-lambda-name
+
+          CUSTOMER_FUNCTION_NAME:
+            !Ref CustomerLambda
 
           DB_HOST_PARAM:
             !Sub /cloudmart/${Environment}/database/host
@@ -383,6 +390,109 @@ Resources:
 
 
   # ==============================================================
+  # CUSTOMER LAMBDA ROLE
+  # ==============================================================
+
+  CustomerLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+
+      RoleName:
+        !Sub cloudmart-${Environment}-customer-lambda-role
+
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+
+      ManagedPolicyArns:
+
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+
+      Policies:
+
+        # --------------------------------------------------------
+        # SSM DATABASE PARAMETERS
+        # --------------------------------------------------------
+
+        - PolicyName: CustomerSSMRead
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+
+                Resource:
+                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudmart/${Environment}/database/password
+                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudmart/${Environment}/database/host
+                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudmart/${Environment}/database/name
+                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudmart/${Environment}/database/username
+
+
+        # --------------------------------------------------------
+        # CLOUDWATCH
+        # --------------------------------------------------------
+
+        - PolicyName: CustomerLogging
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+
+                Resource:
+                  - !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:*
+
+
+  CustomerLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName:
+        !Sub cloudmart-${Environment}-customer
+      Runtime: python3.12
+      Handler: handler.lambda_handler
+      Role:
+        !GetAtt CustomerLambdaRole.Arn
+      Timeout: 30
+      MemorySize: 128
+      VpcConfig:
+        SubnetIds:
+          - Fn::ImportValue:
+              !Sub cloudmart-${Environment}-private-subnet-a-id
+        SecurityGroupIds:
+          - Fn::ImportValue:
+              !Sub cloudmart-${Environment}-lambda-sg-id
+      Code:
+        S3Bucket:
+          Fn::ImportValue:
+            !Sub cloudmart-${Environment}-lambda-artifacts-bucket
+        S3Key:
+          !Ref CustomerLambdaCodeKey
+      Environment:
+        Variables:
+          DB_HOST_PARAM:
+            !Sub /cloudmart/${Environment}/database/host
+          DB_NAME_PARAM:
+            !Sub /cloudmart/${Environment}/database/name
+          DB_USER_PARAM:
+            !Sub /cloudmart/${Environment}/database/username
+          DB_PASSWORD_PARAM:
+            !Sub /cloudmart/${Environment}/database/password
+
+
+  # ==============================================================
   # PRODUCT LAMBDA
   # ==============================================================
 
@@ -523,6 +633,15 @@ Resources:
 
       Principal:
         !GetAtt AuthorizerLambdaRole.Arn
+
+
+  CustomerFunctionInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName:
+        !Ref CustomerLambda
+      Action: lambda:InvokeFunction
+      Principal: !GetAtt AuthorizerLambdaRole.Arn
 
 
   # ==============================================================

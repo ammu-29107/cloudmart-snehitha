@@ -20,6 +20,7 @@ ADMIN_TOKEN_PARAM = os.environ["ADMIN_TOKEN_PARAM"]
 
 PRODUCT_FUNCTION_NAME = os.environ["PRODUCT_FUNCTION_NAME"]
 ORDER_FUNCTION_NAME = os.environ["ORDER_FUNCTION_NAME"]
+CUSTOMER_FUNCTION_NAME = os.environ["CUSTOMER_FUNCTION_NAME"]
 
 DB_HOST_PARAM = os.environ["DB_HOST_PARAM"]
 DB_NAME_PARAM = os.environ["DB_NAME_PARAM"]
@@ -140,6 +141,7 @@ def is_supported_path(path):
         or path.startswith("/products/")
         or path == "/orders"
         or path.startswith("/orders/")
+        or path == "/customers"
         or path.startswith("/customers/")
     )
 
@@ -148,6 +150,13 @@ def is_product_path(path):
     return (
         path == "/products"
         or path.startswith("/products/")
+    )
+
+def is_customer_path(path):
+
+    return (
+        path == "/customers"
+        or path.startswith("/customers/")
     )
 
 def is_allowed(role, method, path):
@@ -177,6 +186,10 @@ def is_allowed(role, method, path):
     else:
 
         permissions = {
+            "PUBLIC": {
+                "POST"
+            },
+
             "CUSTOMER": {
                 "GET",
                 "POST",
@@ -274,6 +287,46 @@ def invoke_order_lambda(event, request_id):
     )
 
 
+def invoke_customer_lambda(event, request_id):
+
+    invoke_response = lambda_client.invoke(
+        FunctionName=CUSTOMER_FUNCTION_NAME,
+        InvocationType="RequestResponse",
+        Payload=json.dumps(event).encode("utf-8")
+    )
+
+    if invoke_response.get("FunctionError"):
+
+        logger.error(
+            json.dumps(
+                {
+                    "request_id": request_id,
+                    "event": "customer_lambda_error",
+                    "function_error": invoke_response[
+                        "FunctionError"
+                    ]
+                }
+            )
+        )
+
+        return response(
+            502,
+            {
+                "authorized": True,
+                "error": {
+                    "code": "CUSTOMER_SERVICE_ERROR",
+                    "message": "Customer service unavailable."
+                }
+            }
+        )
+
+    payload = invoke_response["Payload"].read()
+
+    return json.loads(
+        payload.decode("utf-8")
+    )
+
+
 def lambda_handler(event, context):
 
     request_id = context.aws_request_id
@@ -320,26 +373,48 @@ def lambda_handler(event, context):
 
         if not supplied_token:
 
-            logger.info(
-                json.dumps(
+            if method == "POST" and path == "/customers":
+
+                request_context["authorizer"] = {
+                    "role": "PUBLIC",
+                    "customer_id": None
+                }
+
+                event["requestContext"] = request_context
+
+                logger.info(
+                    json.dumps(
+                        {
+                            "request_id": request_id,
+                            "event": "public_customer_registration",
+                            "method": method,
+                            "path": path
+                        }
+                    )
+                )
+
+            else:
+
+                logger.info(
+                    json.dumps(
+                        {
+                            "request_id": request_id,
+                            "event": "authorization_failed",
+                            "reason": "missing_token"
+                        }
+                    )
+                )
+
+                return response(
+                    401,
                     {
-                        "request_id": request_id,
-                        "event": "authorization_failed",
-                        "reason": "missing_token"
+                        "authorized": False,
+                        "error": {
+                            "code": "UNAUTHORIZED",
+                            "message": "Authentication is required."
+                        }
                     }
                 )
-            )
-
-            return response(
-                401,
-                {
-                    "authorized": False,
-                    "error": {
-                        "code": "UNAUTHORIZED",
-                        "message": "Authentication is required."
-                    }
-                }
-            )
 
         supplied_token = supplied_token.strip()
 
@@ -367,11 +442,62 @@ def lambda_handler(event, context):
             )
         
 
-        # ========================================================
-        # IDENTIFY ROLE
-        # ========================================================
+        if supplied_token:
 
-        role, customer_id = get_role(supplied_token)
+            supplied_token = supplied_token.strip()
+
+            if not supplied_token:
+
+                logger.info(
+                    json.dumps(
+                        {
+                            "request_id": request_id,
+                            "event": "authorization_failed",
+                            "reason": "missing_token"
+                        }
+                    )
+                )
+
+                return response(
+                    401,
+                    {
+                        "authorized": False,
+                        "error": {
+                            "code": "UNAUTHORIZED",
+                            "message": "Invalid authentication credentials."
+                        }
+                    }
+                )
+
+            role, customer_id = get_role(supplied_token)
+
+            if role is None:
+
+                logger.info(
+                    json.dumps(
+                        {
+                            "request_id": request_id,
+                            "event": "authorization_failed",
+                            "reason": "invalid_token"
+                        }
+                    )
+                )
+
+                return response(
+                    401,
+                    {
+                        "authorized": False,
+                        "error": {
+                            "code": "UNAUTHORIZED",
+                            "message": "Invalid authentication credentials."
+                        }
+                    }
+                )
+
+        else:
+
+            role = "PUBLIC"
+            customer_id = None
 
         if role is None:
 
@@ -494,6 +620,24 @@ def lambda_handler(event, context):
             )
 
             return invoke_product_lambda(event, request_id)
+
+
+        if is_customer_path(path):
+
+            logger.info(
+                json.dumps(
+                    {
+                        "request_id": request_id,
+                        "event": "invoking_customer_lambda",
+                        "role": role,
+                        "method": method,
+                        "path": path
+                    }
+                )
+            )
+
+            return invoke_customer_lambda(event, request_id)
+
 
         logger.info(
             json.dumps(

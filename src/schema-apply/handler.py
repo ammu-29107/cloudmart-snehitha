@@ -16,6 +16,7 @@ INSERT IGNORE, so this Lambda is safe to invoke repeatedly.
 
 import os
 import json
+import secrets
 
 import boto3
 import pymysql

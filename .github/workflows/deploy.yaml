@@ -21,6 +21,7 @@ on:
       - 'src/product/**'
       - 'src/authorizer/**'
       - 'src/shared/**'
+      - 'src/customer/**'
       - 'src/schema-apply/**'
       - 'src/order/**'
       - 'src/order-processing/**'
@@ -1335,6 +1336,44 @@ jobs:
             "s3://${{ steps.bucket.outputs.name }}/dev/product/product-${{ github.sha }}.zip"
 
 
+      - name: Package Customer Lambda
+
+        run: |
+
+          test -f src/customer/handler.py || {
+            echo "ERROR: src/customer/handler.py not found."
+            exit 1
+          }
+
+
+          rm -rf build/customer
+
+          mkdir -p build/customer
+
+
+          cp src/customer/handler.py \
+            build/customer/handler.py
+
+
+          pip install pymysql \
+            -t build/customer \
+            --break-system-packages
+
+
+          cd build/customer
+
+
+          zip -r ../../customer.zip .
+
+
+          cd ../..
+
+
+          aws s3 cp \
+            customer.zip \
+            "s3://${{ steps.bucket.outputs.name }}/dev/customer/customer-${{ github.sha }}.zip"
+
+
       # ========================================================
       # PACKAGE AUTHORIZE LAMBDA
       # ========================================================
@@ -1515,6 +1554,7 @@ jobs:
               ParameterKey=LambdaCodeKey,ParameterValue=dev/product/product-${{ github.sha }}.zip \
               ParameterKey=AuthorizerCodeKey,ParameterValue=dev/authorizer/authorizer-${{ github.sha }}.zip \
               ParameterKey=SchemaApplyCodeKey,ParameterValue=dev/schema-apply/schema-apply-${{ github.sha }}.zip \
+              ParameterKey=CustomerLambdaCodeKey,ParameterValue=dev/customer/customer-${{ github.sha }}.zip \
               ParameterKey=AlertEmail,ParameterValue=${{ secrets.ALERT_EMAIL }} \
             --capabilities CAPABILITY_NAMED_IAM
 
