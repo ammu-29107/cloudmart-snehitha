@@ -418,7 +418,7 @@ def lambda_handler(event, context):
 
         supplied_token = supplied_token.strip() if supplied_token else None
 
-        if not supplied_token:
+        if not supplied_token and role != "PUBLIC":
 
             logger.info(
                 json.dumps(
