@@ -75,6 +75,23 @@ def get_customer_id(credential_id):
         with connection.cursor() as cursor:
 
             cursor.execute(
+                "SELECT DATABASE() AS database_name, COUNT(*) AS credential_count "
+                "FROM customer_credentials"
+            )
+
+            db_check = cursor.fetchone()
+
+            logger.info(
+                json.dumps(
+                    {
+                        "event": "customer_credentials_db_check",
+                        "database_name": db_check["database_name"],
+                        "credential_count": db_check["credential_count"]
+                    }
+                )
+            )
+
+            cursor.execute(
                 """
                 SELECT customer_id
                 FROM customer_credentials
