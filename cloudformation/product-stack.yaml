@@ -470,10 +470,10 @@ Resources:
       VpcConfig:
         SubnetIds:
           - Fn::ImportValue:
-              !Sub cloudmart-${Environment}-private-subnet-a-id
+              !Sub cloudmart-${Environment}-private-subnet-a
         SecurityGroupIds:
           - Fn::ImportValue:
-              !Sub cloudmart-${Environment}-lambda-sg-id
+              !Sub cloudmart-${Environment}-sg-lambda
       Code:
         S3Bucket:
           Fn::ImportValue:
