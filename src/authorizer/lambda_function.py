@@ -85,6 +85,16 @@ def get_customer_id(credential_id):
 
             result = cursor.fetchone()
 
+            logger.info(
+                json.dumps(
+                    {
+                        "event": "customer_credential_lookup",
+                        "credential_found": result is not None,
+                        "customer_id": result["customer_id"] if result else None
+                    }
+                )
+            )
+
             if result:
                 return result["customer_id"]
 
