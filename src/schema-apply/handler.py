@@ -10,8 +10,10 @@ Parameter Store at runtime.
 
 The password is stored as a SecureString and retrieved with decryption.
 
-Every DDL statement uses IF NOT EXISTS and sample-data inserts use
-INSERT IGNORE, so this Lambda is safe to invoke repeatedly.
+Table creation uses IF NOT EXISTS, sample-data inserts use INSERT IGNORE,
+and schema migrations check the existing schema before making changes.
+This allows the Lambda to be safely invoked repeatedly for the supported
+database states.
 """
 
 import os
@@ -39,7 +41,8 @@ DDL_STATEMENTS = [
 
     """
     CREATE TABLE IF NOT EXISTS customer_credentials (
-      credential_id VARCHAR(255) PRIMARY KEY,
+      credential_record_id INT AUTO_INCREMENT PRIMARY KEY,
+      credential_id VARCHAR(255) NOT NULL UNIQUE,
       customer_id INT NOT NULL,
       FOREIGN KEY (customer_id) REFERENCES customers(customer_id)
     )
@@ -305,18 +308,6 @@ SAMPLE_DATA_STATEMENTS = [
     """
 ]
 
-# Database migrations.
-IDEMPOTENCY_MIGRATION_STATEMENTS = [
-    """
-    ALTER TABLE idempotency_keys
-    MODIFY COLUMN status ENUM(
-      'IN_PROGRESS',
-      'COMPLETED',
-      'FAILED',
-      'CANCELLED'
-    ) NOT NULL
-    """
-]
 
 
 def get_ssm_parameter(name, with_decryption=False):
@@ -330,6 +321,34 @@ def get_ssm_parameter(name, with_decryption=False):
     )
 
     return response["Parameter"]["Value"]
+
+
+def migrate_customer_credentials(cur):
+    """
+    Convert the old customer_credentials schema to the new schema.
+
+    Safe to run repeatedly:
+    - If credential_record_id already exists, no changes are made.
+    - If the old schema exists, it is migrated while preserving credentials.
+    """
+
+    cur.execute("""
+        SELECT COUNT(*)
+        FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE()
+          AND TABLE_NAME = 'customer_credentials'
+          AND COLUMN_NAME = 'credential_record_id'
+    """)
+
+    column_exists = cur.fetchone()[0]
+
+    if column_exists == 0:
+        cur.execute("""
+            ALTER TABLE customer_credentials
+            DROP PRIMARY KEY,
+            ADD COLUMN credential_record_id INT NOT NULL AUTO_INCREMENT PRIMARY KEY FIRST,
+            MODIFY COLUMN credential_id VARCHAR(255) NOT NULL UNIQUE
+        """)
 
 
 def lambda_handler(event, context):
@@ -391,9 +410,7 @@ def lambda_handler(event, context):
             # APPLY DATABASE MIGRATIONS
             # ====================================================
 
-            for stmt in IDEMPOTENCY_MIGRATION_STATEMENTS:
-
-                cur.execute(stmt)
+            migrate_customer_credentials(cur)
 
             # ====================================================
             # INSERT SAMPLE DATA

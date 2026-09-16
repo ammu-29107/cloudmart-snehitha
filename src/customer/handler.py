@@ -176,34 +176,53 @@ def lambda_handler(event, context):
             customer_id = cur.lastrowid
 
             # ------------------------------------------------
-            # Generate customer credential
+            # Generate and store customer credential
             # ------------------------------------------------
 
-            credential_id = (
-                f"cm-customer-{customer_id}-"
-                f"{secrets.token_urlsafe(24)}"
-            )
+            credential_id = None
 
-            # ------------------------------------------------
-            # Store customer credential
-            # ------------------------------------------------
+            for _ in range(3):
 
-            cur.execute(
-                """
-                INSERT INTO customer_credentials (
-                    credential_id,
-                    customer_id
+                candidate_credential_id = (
+                    f"cm-customer-{customer_id}-"
+                    f"{secrets.token_urlsafe(24)}"
                 )
-                VALUES (
-                    %s,
-                    %s
+
+                try:
+
+                    cur.execute(
+                        """
+                        INSERT INTO customer_credentials (
+                            credential_id,
+                            customer_id
+                        )
+                        VALUES (
+                            %s,
+                            %s
+                        )
+                        """,
+                        (
+                            candidate_credential_id,
+                            customer_id
+                        )
+                    )
+
+                    credential_id = candidate_credential_id
+                    break
+
+                except pymysql.err.IntegrityError as e:
+
+                    # A credential collision is extraordinarily unlikely,
+                    # but the UNIQUE constraint protects us if it ever happens.
+                    if e.args and e.args[0] == 1062:
+                        continue
+
+                    raise
+
+            if credential_id is None:
+                raise RuntimeError(
+                    "Unable to generate a unique customer credential"
                 )
-                """,
-                (
-                    credential_id,
-                    customer_id
-                )
-            )
 
             conn.commit()
 
