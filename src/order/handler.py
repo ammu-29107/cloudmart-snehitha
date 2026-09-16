@@ -805,7 +805,7 @@ def create_order(
                 sqs_message
             ),
 
-            DelaySeconds=15
+            DelaySeconds=30
         )
 
 
