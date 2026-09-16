@@ -803,7 +803,9 @@ def create_order(
 
             MessageBody=json.dumps(
                 sqs_message
-            )
+            ),
+
+            DelaySeconds=15
         )
 
 
