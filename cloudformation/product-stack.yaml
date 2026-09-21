@@ -87,7 +87,6 @@ Resources:
                   - ssm:GetParameter
                   - ssm:GetParameters
                 Resource:
-                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudmart/${Environment}/auth/customer-token
                   - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudmart/${Environment}/auth/product-owner-token
                   - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudmart/${Environment}/auth/admin-token 
 
@@ -196,9 +195,6 @@ Resources:
 
       Environment:
         Variables:
-
-          CUSTOMER_TOKEN_PARAM:
-            !Sub /cloudmart/${Environment}/auth/customer-token
 
           PRODUCT_OWNER_TOKEN_PARAM:
             !Sub /cloudmart/${Environment}/auth/product-owner-token

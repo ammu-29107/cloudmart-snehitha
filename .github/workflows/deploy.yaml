@@ -177,13 +177,10 @@ jobs:
           elif [ "$STACK_STATUS" = "ROLLBACK_COMPLETE" ] ||
                [ "$STACK_STATUS" = "ROLLBACK_FAILED" ]; then
 
-            aws cloudformation delete-stack \
-              --stack-name "$STACK_NAME"
-
-            aws cloudformation wait stack-delete-complete \
-              --stack-name "$STACK_NAME"
-
-            echo "changeset_type=CREATE" >> "$GITHUB_OUTPUT"
+            echo "ERROR: Stack is in $STACK_STATUS."
+            echo "Automatic stack deletion is disabled."
+            echo "Manual CloudFormation recovery is required."
+            exit 1
 
 
           else
@@ -432,20 +429,10 @@ jobs:
           elif [ "$STACK_STATUS" = "ROLLBACK_COMPLETE" ] ||
                [ "$STACK_STATUS" = "ROLLBACK_FAILED" ]; then
 
-            echo "Database stack is in $STACK_STATUS."
-
-            echo "Deleting failed stack before recreating it..."
-
-
-            aws cloudformation delete-stack \
-              --stack-name "$STACK_NAME"
-
-
-            aws cloudformation wait stack-delete-complete \
-              --stack-name "$STACK_NAME"
-
-
-            echo "changeset_type=CREATE" >> "$GITHUB_OUTPUT"
+            echo "ERROR: Database stack is in $STACK_STATUS."
+            echo "Automatic stack deletion is disabled."
+            echo "Manual CloudFormation recovery is required."
+            exit 1
 
 
           else
@@ -798,15 +785,10 @@ jobs:
           elif [ "$STACK_STATUS" = "ROLLBACK_COMPLETE" ] ||
                [ "$STACK_STATUS" = "ROLLBACK_FAILED" ]; then
 
-            aws cloudformation delete-stack \
-              --stack-name "$STACK_NAME"
-
-
-            aws cloudformation wait stack-delete-complete \
-              --stack-name "$STACK_NAME"
-
-
-            echo "changeset_type=CREATE" >> "$GITHUB_OUTPUT"
+            echo "ERROR: Stack is in $STACK_STATUS."
+            echo "Automatic stack deletion is disabled."
+            echo "Manual CloudFormation recovery is required."
+            exit 1
 
 
           else
@@ -1015,15 +997,10 @@ jobs:
           elif [ "$STACK_STATUS" = "ROLLBACK_COMPLETE" ] ||
                [ "$STACK_STATUS" = "ROLLBACK_FAILED" ]; then
 
-            aws cloudformation delete-stack \
-              --stack-name "$STACK_NAME"
-
-
-            aws cloudformation wait stack-delete-complete \
-              --stack-name "$STACK_NAME"
-
-
-            echo "changeset_type=CREATE" >> "$GITHUB_OUTPUT"
+            echo "ERROR: Stack is in $STACK_STATUS."
+            echo "Automatic stack deletion is disabled."
+            echo "Manual CloudFormation recovery is required."
+            exit 1
 
 
           else
@@ -1496,21 +1473,10 @@ jobs:
 
             ROLLBACK_COMPLETE|ROLLBACK_FAILED)
 
-              echo "Deleting failed product stack..."
-
-
-              aws cloudformation delete-stack \
-                --stack-name "$STACK_NAME"
-
-
-              aws cloudformation wait stack-delete-complete \
-                --stack-name "$STACK_NAME"
-
-
-              echo "Stack deleted."
-
-
-              echo "changeset_type=CREATE" >> "$GITHUB_OUTPUT"
+              echo "ERROR: Product stack is in $STACK_STATUS."
+              echo "Automatic stack deletion is disabled."
+              echo "Manual CloudFormation recovery is required."
+              exit 1
 
               ;;
 
@@ -2270,23 +2236,10 @@ jobs:
 
             ROLLBACK_COMPLETE|ROLLBACK_FAILED)
 
-              echo "Order stack is in $STACK_STATUS."
-
-              echo "Deleting failed stack before recreating it..."
-
-
-              aws cloudformation delete-stack \
-                --stack-name "$STACK_NAME"
-
-
-              aws cloudformation wait stack-delete-complete \
-                --stack-name "$STACK_NAME"
-
-
-              echo "Stack deleted."
-
-
-              echo "changeset_type=CREATE" >> "$GITHUB_OUTPUT"
+              echo "ERROR: Order stack is in $STACK_STATUS."
+              echo "Automatic stack deletion is disabled."
+              echo "Manual CloudFormation recovery is required."
+              exit 1
 
               ;;
 
@@ -2709,22 +2662,10 @@ jobs:
 
             ROLLBACK_COMPLETE|ROLLBACK_FAILED)
 
-              echo "Order Processing stack is in $STACK_STATUS."
-
-              echo "Deleting failed stack before recreating it..."
-
-
-              aws cloudformation delete-stack \
-                --stack-name "$STACK_NAME"
-
-
-              aws cloudformation wait stack-delete-complete \
-                --stack-name "$STACK_NAME"
-
-
-              echo "Stack deleted."
-
-              echo "changeset_type=CREATE" >> "$GITHUB_OUTPUT"
+              echo "ERROR: Order Processing stack is in $STACK_STATUS."
+              echo "Automatic stack deletion is disabled."
+              echo "Manual CloudFormation recovery is required."
+              exit 1
 
               ;;
 
