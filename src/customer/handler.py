@@ -69,7 +69,8 @@ def get_database_connection():
         password=password,
         database=db_name,
         connect_timeout=10,
-        autocommit=False
+        autocommit=False,
+        cursorclass=pymysql.cursors.DictCursor
     )
 
 
