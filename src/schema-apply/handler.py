@@ -10,15 +10,13 @@ Parameter Store at runtime.
 
 The password is stored as a SecureString and retrieved with decryption.
 
-Table creation uses IF NOT EXISTS, sample-data inserts use INSERT IGNORE,
-and schema migrations check the existing schema before making changes.
-This allows the Lambda to be safely invoked repeatedly for the supported
-database states.
+Table creation uses IF NOT EXISTS, and sample-data inserts use
+INSERT IGNORE. The database schema is defined by the final CloudMart
+authentication and order-processing model.
 """
 
 import os
 import json
-import secrets
 
 import boto3
 import pymysql
@@ -42,9 +40,26 @@ DDL_STATEMENTS = [
     """
     CREATE TABLE IF NOT EXISTS customer_credentials (
       credential_record_id INT AUTO_INCREMENT PRIMARY KEY,
-      credential_id VARCHAR(255) NOT NULL UNIQUE,
-      customer_id INT NOT NULL,
+      customer_id INT NOT NULL UNIQUE,
+      password_hash VARCHAR(255) NOT NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        ON UPDATE CURRENT_TIMESTAMP,
       FOREIGN KEY (customer_id) REFERENCES customers(customer_id)
+    )
+    """,
+
+    """
+    CREATE TABLE IF NOT EXISTS customer_access_tokens (
+      token_record_id INT AUTO_INCREMENT PRIMARY KEY,
+      customer_id INT NOT NULL,
+      token_hash CHAR(64) NOT NULL UNIQUE,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      expires_at DATETIME NOT NULL,
+      revoked_at DATETIME NULL,
+      FOREIGN KEY (customer_id) REFERENCES customers(customer_id),
+      INDEX idx_customer_access_tokens_customer (customer_id),
+      INDEX idx_customer_access_tokens_expires (expires_at)
     )
     """,
 
@@ -184,7 +199,7 @@ DDL_STATEMENTS = [
 ]
 
 
-# Milestone 3 sample data for the review/demo.
+# Baseline catalog data for the CloudMart review/demo.
 SAMPLE_DATA_STATEMENTS = [
     """
     INSERT IGNORE INTO categories (
@@ -239,72 +254,6 @@ SAMPLE_DATA_STATEMENTS = [
         8,
         'ACTIVE'
       )
-    """,
-    """
-    INSERT IGNORE INTO customers (
-      customer_id,
-      first_name,
-      last_name,
-      email,
-      phone,
-      status
-    )
-    VALUES (
-      1,
-      'Test',
-      'Customer',
-      'test.customer@cloudmart.local',
-      '9876543210',
-      'ACTIVE'
-    )
-    """,
-
-    """
-    INSERT IGNORE INTO customer_credentials (
-      credential_id,
-      customer_id
-    )
-    VALUES (
-      'cm-customer-1-demo-9f7K2x',
-      1
-    )
-    """,
-
-    """
-    INSERT IGNORE INTO addresses (
-      address_id,
-      customer_id,
-      address_line1,
-      address_line2,
-      city,
-      state,
-      postal_code,
-      country,
-      is_default
-    )
-    VALUES
-      (
-        1,
-        1,
-        '123 CloudMart Street',
-        NULL,
-        'Hyderabad',
-        'Telangana',
-        '500001',
-        'India',
-        TRUE
-      ),
-      (
-        2,
-        1,
-        '456 CloudMart Avenue',
-        NULL,
-        'Hyderabad',
-        'Telangana',
-        '500002',
-        'India',
-        FALSE
-      )
     """
 ]
 
@@ -321,34 +270,6 @@ def get_ssm_parameter(name, with_decryption=False):
     )
 
     return response["Parameter"]["Value"]
-
-
-def migrate_customer_credentials(cur):
-    """
-    Convert the old customer_credentials schema to the new schema.
-
-    Safe to run repeatedly:
-    - If credential_record_id already exists, no changes are made.
-    - If the old schema exists, it is migrated while preserving credentials.
-    """
-
-    cur.execute("""
-        SELECT COUNT(*)
-        FROM information_schema.COLUMNS
-        WHERE TABLE_SCHEMA = DATABASE()
-          AND TABLE_NAME = 'customer_credentials'
-          AND COLUMN_NAME = 'credential_record_id'
-    """)
-
-    column_exists = cur.fetchone()[0]
-
-    if column_exists == 0:
-        cur.execute("""
-            ALTER TABLE customer_credentials
-            DROP PRIMARY KEY,
-            ADD COLUMN credential_record_id INT NOT NULL AUTO_INCREMENT PRIMARY KEY FIRST,
-            MODIFY COLUMN credential_id VARCHAR(255) NOT NULL UNIQUE
-        """)
 
 
 def lambda_handler(event, context):
@@ -405,12 +326,6 @@ def lambda_handler(event, context):
                 applied.append(
                     stmt.strip().split("\n")[0]
                 )
-
-            # ====================================================
-            # APPLY DATABASE MIGRATIONS
-            # ====================================================
-
-            migrate_customer_credentials(cur)
 
             # ====================================================
             # INSERT SAMPLE DATA

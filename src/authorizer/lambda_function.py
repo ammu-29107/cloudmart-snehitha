@@ -1,3 +1,4 @@
+import hashlib
 import json
 import logging
 import os
@@ -44,7 +45,11 @@ def response(status_code, body):
     }
 
 
-def get_customer_id(credential_id):
+def get_customer_id_from_access_token(access_token):
+
+    token_hash = hashlib.sha256(
+        access_token.encode("utf-8")
+    ).hexdigest()
 
     parameters = ssm.get_parameters(
         Names=[
@@ -77,10 +82,12 @@ def get_customer_id(credential_id):
             cursor.execute(
                 """
                 SELECT customer_id
-                FROM customer_credentials
-                WHERE credential_id = %s
+                FROM customer_access_tokens
+                WHERE token_hash = %s
+                  AND revoked_at IS NULL
+                  AND expires_at > UTC_TIMESTAMP()
                 """,
-                (credential_id,)
+                (token_hash,)
             )
 
             result = cursor.fetchone()
@@ -126,7 +133,9 @@ def get_role(supplied_token):
         ):
             return role, None
 
-    customer_id = get_customer_id(supplied_token)
+    customer_id = get_customer_id_from_access_token(
+        supplied_token
+    )
 
     if customer_id is not None:
         return "CUSTOMER", customer_id
@@ -137,7 +146,8 @@ def get_role(supplied_token):
 def is_supported_path(path):
 
     return (
-        path == "/products"
+        path == "/login"
+        or path == "/products"
         or path.startswith("/products/")
         or path == "/orders"
         or path.startswith("/orders/")
@@ -366,18 +376,31 @@ def lambda_handler(event, context):
 
         headers = event.get("headers") or {}
 
-        supplied_token = (
-            headers.get("X-CloudMart-Token")
-            or headers.get("x-cloudmart-token")
+        authorization_header = (
+            headers.get("Authorization")
+            or headers.get("authorization")
         )
 
-        supplied_token = (
-            supplied_token.strip()
-            if supplied_token
-            else None
-        )
+        supplied_token = None
 
-        if method == "POST" and path == "/customers" and not supplied_token:
+        if authorization_header:
+
+            authorization_parts = authorization_header.strip().split(
+                " ",
+                1
+            )
+
+            if (
+                len(authorization_parts) == 2
+                and authorization_parts[0].lower() == "bearer"
+            ):
+                supplied_token = authorization_parts[1].strip()
+
+        if (
+            method == "POST"
+            and path in ["/customers", "/login"]
+            and not supplied_token
+        ):
 
             role = "PUBLIC"
             customer_id = None

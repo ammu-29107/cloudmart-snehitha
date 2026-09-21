@@ -1357,6 +1357,11 @@ jobs:
             --break-system-packages
 
 
+          pip install pymysql bcrypt \
+            -t build/customer \
+            --break-system-packages
+
+
           cd build/customer
 
 
