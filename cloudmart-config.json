@@ -14,13 +14,5 @@
   {
     "ParameterKey": "LowStockThreshold",
     "ParameterValue": "10"
-  },
-  {
-    "ParameterKey": "AlertEmail",
-    "ParameterValue": "temporary-alert@example.com"
-  },
-  {
-    "ParameterKey": "SesSenderEmail",
-    "ParameterValue": "temporary-sender@example.com"
   }
 ]

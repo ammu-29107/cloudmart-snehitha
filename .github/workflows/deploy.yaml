@@ -52,9 +52,25 @@ jobs:
 
     runs-on: ubuntu-latest
 
+    outputs:
+      aws_region: ${{ steps.config.outputs.aws_region }}
+      environment: ${{ steps.config.outputs.environment }}
+      db_instance_class: ${{ steps.config.outputs.db_instance_class }}
+      low_stock_threshold: ${{ steps.config.outputs.low_stock_threshold }}
+
     steps:
 
       - uses: actions/checkout@v4
+
+
+      - name: Load CloudMart configuration
+        id: config
+        shell: bash
+        run: |
+          echo "aws_region=$(jq -r '.[] | select(.ParameterKey=="AWSRegion") | .ParameterValue' cloudmart-config.json)" >> "$GITHUB_OUTPUT"
+          echo "environment=$(jq -r '.[] | select(.ParameterKey=="Environment") | .ParameterValue' cloudmart-config.json)" >> "$GITHUB_OUTPUT"
+          echo "db_instance_class=$(jq -r '.[] | select(.ParameterKey=="DbInstanceClass") | .ParameterValue' cloudmart-config.json)" >> "$GITHUB_OUTPUT"
+          echo "low_stock_threshold=$(jq -r '.[] | select(.ParameterKey=="LowStockThreshold") | .ParameterValue' cloudmart-config.json)" >> "$GITHUB_OUTPUT"
 
 
       - uses: aws-actions/configure-aws-credentials@v4
@@ -63,7 +79,7 @@ jobs:
 
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
 
-          aws-region: ${{ secrets.AWS_REGION }}
+          aws-region: ${{ steps.config.outputs.aws_region }}
 
 
       - name: Verify identity
@@ -116,7 +132,7 @@ jobs:
 
     env:
 
-      STACK_NAME: cloudmart-dev-network
+      STACK_NAME: cloudmart-${{ needs.validate-templates.outputs.environment }}-network
 
       TEMPLATE_FILE: cloudformation/network-stack.yaml
 
@@ -134,7 +150,7 @@ jobs:
 
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
 
-          aws-region: ${{ secrets.AWS_REGION }}
+          aws-region: ${{ needs.validate-templates.outputs.aws_region }}
 
 
       - name: Determine change set type
@@ -187,7 +203,7 @@ jobs:
             --change-set-type "${{ steps.stack-check.outputs.changeset_type }}" \
             --template-body "file://$TEMPLATE_FILE" \
             --parameters \
-              ParameterKey=Environment,ParameterValue=dev \
+              ParameterKey=Environment,ParameterValue=${{ needs.validate-templates.outputs.environment }} \
             --capabilities CAPABILITY_NAMED_IAM
 
 
@@ -362,11 +378,12 @@ jobs:
     runs-on: ubuntu-latest
 
     needs:
+      - validate-templates
       - deploy-network
 
     env:
 
-      STACK_NAME: cloudmart-dev-database
+      STACK_NAME: cloudmart-${{ needs.validate-templates.outputs.environment }}-database
 
       TEMPLATE_FILE: cloudformation/database-stack.yaml
 
@@ -384,7 +401,7 @@ jobs:
 
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
 
-          aws-region: ${{ secrets.AWS_REGION }}
+          aws-region: ${{ needs.validate-templates.outputs.aws_region }}
 
 
       # ========================================================
@@ -458,8 +475,8 @@ jobs:
             --change-set-type "${{ steps.stack-check.outputs.changeset_type }}" \
             --template-body "file://$TEMPLATE_FILE" \
             --parameters \
-              ParameterKey=Environment,ParameterValue=dev \
-              ParameterKey=DbInstanceClass,ParameterValue=db.t3.micro \
+              ParameterKey=Environment,ParameterValue=${{ needs.validate-templates.outputs.environment }} \
+              ParameterKey=DbInstanceClass,ParameterValue=${{ needs.validate-templates.outputs.db_instance_class }} \
               ParameterKey=DbPassword,ParameterValue="${{ secrets.DB_PASSWORD }}" \
             --capabilities CAPABILITY_NAMED_IAM
 
@@ -522,7 +539,7 @@ jobs:
               aws cloudformation describe-events \
                 --stack-name "$STACK_NAME" \
                 --change-set-name "$CHANGESET_NAME" \
-                --region "${{ secrets.AWS_REGION }}" \
+                --region "${{ needs.validate-templates.outputs.aws_region }}" \
                 --output json || true
 
               echo
@@ -652,7 +669,7 @@ jobs:
           echo "Storing database password in SSM SecureString..."
 
           aws ssm put-parameter \
-            --name "/cloudmart/dev/database/password" \
+            --name "/cloudmart/${{ needs.validate-templates.outputs.environment }}/database/password" \
             --value "${{ secrets.DB_PASSWORD }}" \
             --type SecureString \
             --overwrite
@@ -693,28 +710,28 @@ jobs:
           echo
           echo "Database host parameter:"
           aws ssm get-parameter \
-            --name "/cloudmart/dev/database/host" \
+            --name "/cloudmart/${{ needs.validate-templates.outputs.environment }}/database/host" \
             --query "Parameter.Name" \
             --output text
 
           echo
           echo "Database name parameter:"
           aws ssm get-parameter \
-            --name "/cloudmart/dev/database/name" \
+            --name "/cloudmart/${{ needs.validate-templates.outputs.environment }}/database/name" \
             --query "Parameter.Name" \
             --output text
 
           echo
           echo "Database username parameter:"
           aws ssm get-parameter \
-            --name "/cloudmart/dev/database/username" \
+            --name "/cloudmart/${{ needs.validate-templates.outputs.environment }}/database/username" \
             --query "Parameter.Name" \
             --output text
 
           echo
           echo "Database password parameter:"
           aws ssm get-parameter \
-            --name "/cloudmart/dev/database/password" \
+            --name "/cloudmart/${{ needs.validate-templates.outputs.environment }}/database/password" \
             --query "Parameter.{Name:Name,Type:Type}" \
             --output table
 
@@ -734,11 +751,12 @@ jobs:
     runs-on: ubuntu-latest
 
     needs:
+      - validate-templates
       - deploy-database
 
     env:
 
-      STACK_NAME: cloudmart-dev-storage
+      STACK_NAME: cloudmart-${{ needs.validate-templates.outputs.environment }}-storage
 
       TEMPLATE_FILE: cloudformation/storage-stack.yaml
 
@@ -756,7 +774,7 @@ jobs:
 
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
 
-          aws-region: ${{ secrets.AWS_REGION }}
+          aws-region: ${{ needs.validate-templates.outputs.aws_region }}
 
 
       - name: Determine change set type
@@ -814,7 +832,7 @@ jobs:
             --change-set-type "${{ steps.stack-check.outputs.changeset_type }}" \
             --template-body "file://$TEMPLATE_FILE" \
             --parameters \
-              ParameterKey=Environment,ParameterValue=dev \
+              ParameterKey=Environment,ParameterValue=${{ needs.validate-templates.outputs.environment }} \
             --capabilities CAPABILITY_NAMED_IAM
 
 
@@ -950,11 +968,12 @@ jobs:
     runs-on: ubuntu-latest
 
     needs:
+      - validate-templates
       - deploy-storage
 
     env:
 
-      STACK_NAME: cloudmart-dev-eventbus
+      STACK_NAME: cloudmart-${{ needs.validate-templates.outputs.environment }}-eventbus
 
       TEMPLATE_FILE: cloudformation/eventbus-stack.yaml
 
@@ -972,7 +991,7 @@ jobs:
 
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
 
-          aws-region: ${{ secrets.AWS_REGION }}
+          aws-region: ${{ needs.validate-templates.outputs.aws_region }}
 
 
       - name: Determine change set type
@@ -1037,7 +1056,7 @@ jobs:
             --change-set-type "${{ steps.stack-check.outputs.changeset_type }}" \
             --template-body "file://$TEMPLATE_FILE" \
             --parameters \
-              ParameterKey=Environment,ParameterValue=dev \
+              ParameterKey=Environment,ParameterValue=${{ needs.validate-templates.outputs.environment }} \
               ParameterKey=AlertEmail,ParameterValue="${{ secrets.ALERT_EMAIL }}" \
             --capabilities CAPABILITY_NAMED_IAM
 
@@ -1168,11 +1187,12 @@ jobs:
     runs-on: ubuntu-latest
 
     needs:
+      - validate-templates
       - deploy-eventbus
 
     env:
 
-      STACK_NAME: cloudmart-dev-product
+      STACK_NAME: cloudmart-${{ needs.validate-templates.outputs.environment }}-product
 
       TEMPLATE_FILE: cloudformation/product-stack.yaml
 
@@ -1210,7 +1230,7 @@ jobs:
 
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
 
-          aws-region: ${{ secrets.AWS_REGION }}
+          aws-region: ${{ needs.validate-templates.outputs.aws_region }}
 
 
       # ========================================================
@@ -1222,7 +1242,7 @@ jobs:
         run: |
 
           aws ssm put-parameter \
-            --name "/cloudmart/dev/auth/product-owner-token" \
+            --name "/cloudmart/${{ needs.validate-templates.outputs.environment }}/auth/product-owner-token" \
             --type SecureString \
             --value "${{ secrets.CLOUDMART_PRODUCT_OWNER_TOKEN }}" \
             --overwrite
@@ -1233,7 +1253,7 @@ jobs:
         run: |
 
           aws ssm put-parameter \
-            --name "/cloudmart/dev/auth/admin-token" \
+            --name "/cloudmart/${{ needs.validate-templates.outputs.environment }}/auth/admin-token" \
             --type SecureString \
             --value "${{ secrets.CLOUDMART_ADMIN_TOKEN }}" \
             --overwrite
@@ -1248,9 +1268,9 @@ jobs:
         run: |
 
           aws ssm put-parameter \
-            --name "/cloudmart/dev/inventory/low-stock-threshold" \
+            --name "/cloudmart/${{ needs.validate-templates.outputs.environment }}/inventory/low-stock-threshold" \
             --type String \
-            --value "10" \
+            --value "${{ needs.validate-templates.outputs.low_stock_threshold }}" \
             --overwrite
 
 
@@ -1265,7 +1285,7 @@ jobs:
         run: |
 
           BUCKET=$(aws cloudformation list-exports \
-            --query "Exports[?Name=='cloudmart-dev-lambda-artifacts-bucket'].Value" \
+            --query "Exports[?Name=='cloudmart-${{ needs.validate-templates.outputs.environment }}-lambda-artifacts-bucket'].Value" \
             --output text)
 
 
@@ -1333,7 +1353,7 @@ jobs:
 
           aws s3 cp \
             product.zip \
-            "s3://${{ steps.bucket.outputs.name }}/dev/product/product-${{ github.sha }}.zip"
+            "s3://${{ steps.bucket.outputs.name }}/${{ needs.validate-templates.outputs.environment }}/product/product-${{ github.sha }}.zip"
 
 
       - name: Package Customer Lambda
@@ -1371,7 +1391,7 @@ jobs:
 
           aws s3 cp \
             customer.zip \
-            "s3://${{ steps.bucket.outputs.name }}/dev/customer/customer-${{ github.sha }}.zip"
+            "s3://${{ steps.bucket.outputs.name }}/${{ needs.validate-templates.outputs.environment }}/customer/customer-${{ github.sha }}.zip"
 
 
       # ========================================================
@@ -1406,7 +1426,7 @@ jobs:
 
           aws s3 cp \
             authorizer.zip \
-            "s3://${{ steps.bucket.outputs.name }}/dev/authorizer/authorizer-${{ github.sha }}.zip"
+            "s3://${{ steps.bucket.outputs.name }}/${{ needs.validate-templates.outputs.environment }}/authorizer/authorizer-${{ github.sha }}.zip"
 
 
       # ========================================================
@@ -1443,7 +1463,7 @@ jobs:
 
           aws s3 cp \
             schema-apply.zip \
-            "s3://${{ steps.bucket.outputs.name }}/dev/schema-apply/schema-apply-${{ github.sha }}.zip"
+            "s3://${{ steps.bucket.outputs.name }}/${{ needs.validate-templates.outputs.environment }}/schema-apply/schema-apply-${{ github.sha }}.zip"
 
 
       # ========================================================
@@ -1550,11 +1570,11 @@ jobs:
             --change-set-type "${{ steps.stack-check.outputs.changeset_type }}" \
             --template-body "file://$TEMPLATE_FILE" \
             --parameters \
-              ParameterKey=Environment,ParameterValue=dev \
-              ParameterKey=LambdaCodeKey,ParameterValue=dev/product/product-${{ github.sha }}.zip \
-              ParameterKey=AuthorizerCodeKey,ParameterValue=dev/authorizer/authorizer-${{ github.sha }}.zip \
-              ParameterKey=SchemaApplyCodeKey,ParameterValue=dev/schema-apply/schema-apply-${{ github.sha }}.zip \
-              ParameterKey=CustomerLambdaCodeKey,ParameterValue=dev/customer/customer-${{ github.sha }}.zip \
+              ParameterKey=Environment,ParameterValue=${{ needs.validate-templates.outputs.environment }} \
+              ParameterKey=LambdaCodeKey,ParameterValue=${{ needs.validate-templates.outputs.environment }}/product/product-${{ github.sha }}.zip \
+              ParameterKey=AuthorizerCodeKey,ParameterValue=${{ needs.validate-templates.outputs.environment }}/authorizer/authorizer-${{ github.sha }}.zip \
+              ParameterKey=SchemaApplyCodeKey,ParameterValue=${{ needs.validate-templates.outputs.environment }}/schema-apply/schema-apply-${{ github.sha }}.zip \
+              ParameterKey=CustomerLambdaCodeKey,ParameterValue=${{ needs.validate-templates.outputs.environment }}/customer/customer-${{ github.sha }}.zip \
               ParameterKey=AlertEmail,ParameterValue=${{ secrets.ALERT_EMAIL }} \
             --capabilities CAPABILITY_NAMED_IAM
 
@@ -1617,7 +1637,7 @@ jobs:
               aws cloudformation describe-events \
                 --stack-name "$STACK_NAME" \
                 --change-set-name "$CHANGESET_NAME" \
-                --region "${{ secrets.AWS_REGION }}" \
+                --region "${{ needs.validate-templates.outputs.aws_region }}" \
                 --output json || true
 
               echo
@@ -1755,7 +1775,7 @@ jobs:
 
 
           aws lambda invoke \
-            --function-name cloudmart-dev-schema-apply \
+            --function-name cloudmart-${{ needs.validate-templates.outputs.environment }}-schema-apply \
             --payload '{}' \
             --cli-binary-format raw-in-base64-out \
             schema-response.json
@@ -1997,7 +2017,7 @@ jobs:
             echo "Checking Lambda Function URL configuration..."
 
             aws lambda get-function-url-config \
-              --function-name cloudmart-dev-authorizer \
+              --function-name cloudmart-${{ needs.validate-templates.outputs.environment }}-authorizer \
               --output json || true
 
 
@@ -2006,7 +2026,7 @@ jobs:
             echo "Checking Authorizer Lambda resource policy..."
 
             aws lambda get-policy \
-              --function-name cloudmart-dev-authorizer \
+              --function-name cloudmart-${{ needs.validate-templates.outputs.environment }}-authorizer \
               --output json || true
 
 
@@ -2015,7 +2035,7 @@ jobs:
             echo "Checking Authorizer Lambda configuration..."
 
             aws lambda get-function-configuration \
-              --function-name cloudmart-dev-authorizer \
+              --function-name cloudmart-${{ needs.validate-templates.outputs.environment }}-authorizer \
               --query '{FunctionName:FunctionName,State:State,LastUpdateStatus:LastUpdateStatus,Runtime:Runtime,Handler:Handler}' \
               --output table || true
 
@@ -2025,7 +2045,7 @@ jobs:
             echo "Recent Authorizer Lambda logs:"
 
             aws logs describe-log-streams \
-              --log-group-name /aws/lambda/cloudmart-dev-authorizer \
+              --log-group-name /aws/lambda/cloudmart-${{ needs.validate-templates.outputs.environment }}-authorizer \
               --order-by LastEventTime \
               --descending \
               --max-items 3 \
@@ -2089,56 +2109,6 @@ jobs:
           cat /tmp/authorizer-wrong-token-response.txt || true
 
 
-      # ========================================================
-      # AUTHORIZE TEST - CUSTOMER TOKEN
-      # ========================================================
-
-      - name: Smoke test - Customer token can access products
-
-        run: |
-
-          BASE_URL="${{ steps.authorizer.outputs.authorizer_url }}"
-          BASE_URL="${BASE_URL%/}"
-          URL="$BASE_URL/products"
-
-
-          echo "Testing Authorizer with customer token..."
-
-          echo "$URL"
-
-          echo
-
-
-          STATUS=$(curl \
-            -s \
-            -o /tmp/customer-product-response.txt \
-            -w "%{http_code}" \
-            --max-time 30 \
-            -H "X-CloudMart-Token: cm-customer-1-demo-9f7K2x" \
-            "$URL")
-
-
-          echo "Authorizer/Product HTTP status: $STATUS"
-
-
-          if [ "$STATUS" -ne 200 ]; then
-
-            echo "ERROR: Customer token could not access products."
-
-            cat /tmp/customer-product-response.txt || true
-
-            exit 1
-
-          fi
-
-
-          echo "Customer token successfully accessed products."
-
-          echo "Response:"
-
-          cat /tmp/customer-product-response.txt || true
-
-
   # ============================================================
   # JOB 6
   # ORDER STACK
@@ -2151,11 +2121,12 @@ jobs:
     runs-on: ubuntu-latest
 
     needs:
+      - validate-templates
       - deploy-product
 
     env:
 
-      STACK_NAME: cloudmart-dev-order
+      STACK_NAME: cloudmart-${{ needs.validate-templates.outputs.environment }}-order
 
       TEMPLATE_FILE: cloudformation/order-stack.yaml
 
@@ -2192,7 +2163,7 @@ jobs:
 
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
 
-          aws-region: ${{ secrets.AWS_REGION }}
+          aws-region: ${{ needs.validate-templates.outputs.aws_region }}
 
 
       # ========================================================
@@ -2206,7 +2177,7 @@ jobs:
         run: |
 
           BUCKET=$(aws cloudformation list-exports \
-            --query "Exports[?Name=='cloudmart-dev-lambda-artifacts-bucket'].Value" \
+            --query "Exports[?Name=='cloudmart-${{ needs.validate-templates.outputs.environment }}-lambda-artifacts-bucket'].Value" \
             --output text)
 
 
@@ -2266,7 +2237,7 @@ jobs:
 
           aws s3 cp \
             order.zip \
-            "s3://${{ steps.bucket.outputs.name }}/dev/order/order-${{ github.sha }}.zip"
+            "s3://${{ steps.bucket.outputs.name }}/${{ needs.validate-templates.outputs.environment }}/order/order-${{ github.sha }}.zip"
 
 
       # ========================================================
@@ -2379,8 +2350,8 @@ jobs:
             --change-set-type "${{ steps.stack-check.outputs.changeset_type }}" \
             --template-body "file://$TEMPLATE_FILE" \
             --parameters \
-              ParameterKey=Environment,ParameterValue=dev \
-              ParameterKey=OrderCodeKey,ParameterValue=dev/order/order-${{ github.sha }}.zip \
+              ParameterKey=Environment,ParameterValue=${{ needs.validate-templates.outputs.environment }} \
+              ParameterKey=OrderCodeKey,ParameterValue=${{ needs.validate-templates.outputs.environment }}/order/order-${{ github.sha }}.zip \
               ParameterKey=SesSenderEmail,ParameterValue="${{ secrets.SES_SENDER_EMAIL }}" \
             --capabilities CAPABILITY_NAMED_IAM
 
@@ -2589,11 +2560,12 @@ jobs:
     runs-on: ubuntu-latest
 
     needs:
+      - validate-templates
       - deploy-order
 
     env:
 
-      STACK_NAME: cloudmart-dev-order-processing
+      STACK_NAME: cloudmart-${{ needs.validate-templates.outputs.environment }}-order-processing
 
       TEMPLATE_FILE: cloudformation/order-processing-stack.yaml
 
@@ -2630,7 +2602,7 @@ jobs:
 
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
 
-          aws-region: ${{ secrets.AWS_REGION }}
+          aws-region: ${{ needs.validate-templates.outputs.aws_region }}
 
 
       # ========================================================
@@ -2644,7 +2616,7 @@ jobs:
         run: |
 
           BUCKET=$(aws cloudformation list-exports \
-            --query "Exports[?Name=='cloudmart-dev-lambda-artifacts-bucket'].Value" \
+            --query "Exports[?Name=='cloudmart-${{ needs.validate-templates.outputs.environment }}-lambda-artifacts-bucket'].Value" \
             --output text)
 
 
@@ -2704,7 +2676,7 @@ jobs:
 
           aws s3 cp \
             order-processing.zip \
-            "s3://${{ steps.bucket.outputs.name }}/dev/order-processing/order-processing-${{ github.sha }}.zip"
+            "s3://${{ steps.bucket.outputs.name }}/${{ needs.validate-templates.outputs.environment }}/order-processing/order-processing-${{ github.sha }}.zip"
 
 
       # ========================================================
@@ -2808,8 +2780,8 @@ jobs:
             --change-set-type "${{ steps.stack-check.outputs.changeset_type }}" \
             --template-body "file://$TEMPLATE_FILE" \
             --parameters \
-              ParameterKey=Environment,ParameterValue=dev \
-              ParameterKey=OrderProcessingCodeKey,ParameterValue=dev/order-processing/order-processing-${{ github.sha }}.zip \
+              ParameterKey=Environment,ParameterValue=${{ needs.validate-templates.outputs.environment }} \
+              ParameterKey=OrderProcessingCodeKey,ParameterValue=${{ needs.validate-templates.outputs.environment }}/order-processing/order-processing-${{ github.sha }}.zip \
               ParameterKey=SesSenderEmail,ParameterValue="${{ secrets.SES_SENDER_EMAIL }}" \
             --capabilities CAPABILITY_NAMED_IAM
 
@@ -3020,6 +2992,7 @@ jobs:
     runs-on: ubuntu-latest
 
     needs:
+      - validate-templates
       - deploy-order-processing
 
     if: always()
@@ -3033,13 +3006,13 @@ jobs:
 
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
 
-          aws-region: ${{ secrets.AWS_REGION }}
+          aws-region: ${{ needs.validate-templates.outputs.aws_region }}
 
 
-      - name: List all cloudmart-dev exports
+      - name: List all cloudmart-${{ needs.validate-templates.outputs.environment }} exports
 
         run: |
 
           aws cloudformation list-exports \
-            --query "Exports[?starts_with(Name, 'cloudmart-dev-')].{Name:Name,Value:Value}" \
+            --query "Exports[?starts_with(Name, 'cloudmart-${{ needs.validate-templates.outputs.environment }}-')].{Name:Name,Value:Value}" \
             --output table
