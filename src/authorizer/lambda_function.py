@@ -165,7 +165,8 @@ def is_product_path(path):
 def is_customer_path(path):
 
     return (
-        path == "/customers"
+        path == "/login"
+        or path == "/customers"
         or path.startswith("/customers/")
     )
 
