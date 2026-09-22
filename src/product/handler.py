@@ -398,9 +398,8 @@ def list_categories(event, request_id):
                 SELECT
                     category_id,
                     category_name,
-                    status,
-                    created_at,
-                    updated_at
+                    description,
+                    status
                 FROM categories
                 WHERE status='ACTIVE'
                 ORDER BY category_name
@@ -442,9 +441,8 @@ def get_category(event, request_id):
                 SELECT
                     category_id,
                     category_name,
-                    status,
-                    created_at,
-                    updated_at
+                    description,
+                    status
                 FROM categories
                 WHERE category_id=%s
                 """,
@@ -591,8 +589,7 @@ def update_category(event, request_id):
                 """
                 UPDATE categories
                 SET
-                    category_name=%s,
-                    updated_at=NOW()
+                    category_name=%s
                 WHERE category_id=%s
                 """,
                 (
@@ -670,8 +667,7 @@ def deactivate_category(event, request_id):
                 """
                 UPDATE categories
                 SET
-                    status='INACTIVE',
-                    updated_at=NOW()
+                    status='INACTIVE'
                 WHERE category_id=%s
                 """,
                 (category_id,)
