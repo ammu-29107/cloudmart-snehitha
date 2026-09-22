@@ -198,6 +198,16 @@ DDL_STATEMENTS = [
     """,
 ]
 
+MIGRATION_STATEMENTS = [
+    """
+    ALTER TABLE addresses
+    ADD COLUMN IF NOT EXISTS address_type
+      ENUM('BILLING','SHIPPING')
+      NOT NULL
+      DEFAULT 'SHIPPING'
+      AFTER customer_id
+    """
+]
 
 # Baseline catalog data for the CloudMart review/demo.
 SAMPLE_DATA_STATEMENTS = [
@@ -314,10 +324,18 @@ def lambda_handler(event, context):
         )
 
         # ========================================================
-        # APPLY DATABASE SCHEMA
+        # APPLY DATABASE MIGRATIONS
         # ========================================================
 
         with conn.cursor() as cur:
+
+            for stmt in MIGRATION_STATEMENTS:
+
+                cur.execute(stmt)
+
+            # ====================================================
+            # APPLY DATABASE SCHEMA
+            # ====================================================
 
             for stmt in DDL_STATEMENTS:
 
