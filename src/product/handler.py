@@ -175,6 +175,21 @@ def handler(event, context):
     # BUSINESS ROUTING
     try:
 
+        if method == "POST" and path == "/categories":
+            return create_category(event, request_id)
+
+        if method == "GET" and path == "/categories":
+            return list_categories(event, request_id)
+
+        if method == "GET" and path.startswith("/categories/"):
+            return get_category(event, request_id)
+
+        if method == "PUT" and path.startswith("/categories/"):
+            return update_category(event, request_id)
+
+        if method == "DELETE" and path.startswith("/categories/"):
+            return deactivate_category(event, request_id)
+
         if method == "POST" and path == "/products":
             return create_product(event, request_id)
 
@@ -224,6 +239,456 @@ def get_low_stock_threshold():
         get_ssm_parameter(
             os.environ["LOW_STOCK_THRESHOLD_PARAM"]
         )
+    )
+
+
+def validate_category_data(body, required_fields=True):
+
+    if required_fields and "category_name" not in body:
+        return "Missing required field(s): category_name"
+
+    if "category_name" in body:
+
+        category_name = body["category_name"]
+
+        if not isinstance(category_name, str):
+            return "Category name must be a string."
+
+        if not category_name.strip():
+            return "Category name cannot be empty."
+
+    return None
+
+
+def get_category_id(event):
+
+    path_parameters = (
+        event.get("pathParameters")
+        or {}
+    )
+
+    category_id = path_parameters.get(
+        "categoryId"
+    )
+
+    if not category_id:
+
+        path = (
+            event.get("rawPath")
+            or event.get("path")
+            or ""
+        )
+
+        category_id = path.rstrip("/").split("/")[-1]
+
+    return category_id
+
+
+def create_category(event, request_id):
+
+    try:
+
+        body = json.loads(
+            event.get("body") or "{}"
+        )
+
+    except json.JSONDecodeError:
+
+        return respond(
+            400,
+            {
+                "success": False,
+                "message": (
+                    "Request body must contain valid JSON."
+                )
+            },
+            request_id
+        )
+
+    validation_error = validate_category_data(body)
+
+    if validation_error:
+
+        return respond(
+            400,
+            {
+                "success": False,
+                "message": validation_error
+            },
+            request_id
+        )
+
+    category_name = body["category_name"].strip()
+
+    conn = get_db_connection()
+
+    try:
+
+        with conn.cursor() as cur:
+
+            cur.execute(
+                """
+                SELECT category_id
+                FROM categories
+                WHERE category_name=%s
+                """,
+                (category_name,)
+            )
+
+            existing = cur.fetchone()
+
+            if existing:
+
+                return respond(
+                    409,
+                    {
+                        "success": False,
+                        "message": "Category already exists."
+                    },
+                    request_id
+                )
+
+            cur.execute(
+                """
+                INSERT INTO categories
+                (
+                    category_name,
+                    status
+                )
+                VALUES (%s, %s)
+                """,
+                (
+                    category_name,
+                    "ACTIVE"
+                )
+            )
+
+            conn.commit()
+
+            category_id = cur.lastrowid
+
+    finally:
+        conn.close()
+
+    return respond(
+        201,
+        {
+            "success": True,
+            "message": "Category created successfully.",
+            "data": {
+                "category_id": category_id,
+                "category_name": category_name,
+                "status": "ACTIVE"
+            }
+        },
+        request_id
+    )
+
+
+def list_categories(event, request_id):
+
+    conn = get_db_connection()
+
+    try:
+
+        with conn.cursor() as cur:
+
+            cur.execute(
+                """
+                SELECT
+                    category_id,
+                    category_name,
+                    status,
+                    created_at,
+                    updated_at
+                FROM categories
+                WHERE status='ACTIVE'
+                ORDER BY category_name
+                """
+            )
+
+            categories = cur.fetchall()
+
+    finally:
+        conn.close()
+
+    return respond(
+        200,
+        {
+            "success": True,
+            "message": (
+                "Categories retrieved successfully."
+                if categories
+                else "No categories found."
+            ),
+            "data": categories
+        },
+        request_id
+    )
+
+
+def get_category(event, request_id):
+
+    category_id = get_category_id(event)
+
+    conn = get_db_connection()
+
+    try:
+
+        with conn.cursor() as cur:
+
+            cur.execute(
+                """
+                SELECT
+                    category_id,
+                    category_name,
+                    status,
+                    created_at,
+                    updated_at
+                FROM categories
+                WHERE category_id=%s
+                """,
+                (category_id,)
+            )
+
+            category = cur.fetchone()
+
+    finally:
+        conn.close()
+
+    if not category:
+
+        return respond(
+            404,
+            {
+                "success": False,
+                "message": "Category not found."
+            },
+            request_id
+        )
+
+    return respond(
+        200,
+        {
+            "success": True,
+            "message": "Category retrieved successfully.",
+            "data": category
+        },
+        request_id
+    )
+
+
+def update_category(event, request_id):
+
+    category_id = get_category_id(event)
+
+    try:
+
+        body = json.loads(
+            event.get("body") or "{}"
+        )
+
+    except json.JSONDecodeError:
+
+        return respond(
+            400,
+            {
+                "success": False,
+                "message": (
+                    "Request body must contain valid JSON."
+                )
+            },
+            request_id
+        )
+
+    validation_error = validate_category_data(
+        body,
+        required_fields=False
+    )
+
+    if validation_error:
+
+        return respond(
+            400,
+            {
+                "success": False,
+                "message": validation_error
+            },
+            request_id
+        )
+
+    if "category_name" not in body:
+
+        return respond(
+            400,
+            {
+                "success": False,
+                "message": "No category fields were provided."
+            },
+            request_id
+        )
+
+    category_name = body["category_name"].strip()
+
+    conn = get_db_connection()
+
+    try:
+
+        with conn.cursor() as cur:
+
+            cur.execute(
+                """
+                SELECT
+                    category_id,
+                    category_name,
+                    status
+                FROM categories
+                WHERE category_id=%s
+                """,
+                (category_id,)
+            )
+
+            existing = cur.fetchone()
+
+            if not existing:
+
+                return respond(
+                    404,
+                    {
+                        "success": False,
+                        "message": "Category not found."
+                    },
+                    request_id
+                )
+
+            cur.execute(
+                """
+                SELECT category_id
+                FROM categories
+                WHERE category_name=%s
+                AND category_id<>%s
+                """,
+                (
+                    category_name,
+                    category_id
+                )
+            )
+
+            duplicate = cur.fetchone()
+
+            if duplicate:
+
+                return respond(
+                    409,
+                    {
+                        "success": False,
+                        "message": "Category already exists."
+                    },
+                    request_id
+                )
+
+            cur.execute(
+                """
+                UPDATE categories
+                SET
+                    category_name=%s,
+                    updated_at=NOW()
+                WHERE category_id=%s
+                """,
+                (
+                    category_name,
+                    category_id
+                )
+            )
+
+            conn.commit()
+
+    finally:
+        conn.close()
+
+    return respond(
+        200,
+        {
+            "success": True,
+            "message": "Category updated successfully.",
+            "data": {
+                "category_id": int(category_id),
+                "category_name": category_name
+            }
+        },
+        request_id
+    )
+
+
+def deactivate_category(event, request_id):
+
+    category_id = get_category_id(event)
+
+    conn = get_db_connection()
+
+    try:
+
+        with conn.cursor() as cur:
+
+            cur.execute(
+                """
+                SELECT
+                    category_id,
+                    category_name,
+                    status
+                FROM categories
+                WHERE category_id=%s
+                """,
+                (category_id,)
+            )
+
+            existing = cur.fetchone()
+
+            if not existing:
+
+                return respond(
+                    404,
+                    {
+                        "success": False,
+                        "message": "Category not found."
+                    },
+                    request_id
+                )
+
+            if existing["status"] == "INACTIVE":
+
+                return respond(
+                    409,
+                    {
+                        "success": False,
+                        "message": "Category is already inactive."
+                    },
+                    request_id
+                )
+
+            cur.execute(
+                """
+                UPDATE categories
+                SET
+                    status='INACTIVE',
+                    updated_at=NOW()
+                WHERE category_id=%s
+                """,
+                (category_id,)
+            )
+
+            conn.commit()
+
+    finally:
+        conn.close()
+
+    return respond(
+        200,
+        {
+            "success": True,
+            "message": "Category deactivated successfully."
+        },
+        request_id
     )
 
 

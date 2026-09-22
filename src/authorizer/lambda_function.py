@@ -147,6 +147,8 @@ def is_supported_path(path):
 
     return (
         path == "/login"
+        or path == "/categories"
+        or path.startswith("/categories/")
         or path == "/products"
         or path.startswith("/products/")
         or path == "/orders"
@@ -156,10 +158,11 @@ def is_supported_path(path):
     )
 
 def is_product_path(path):
-
     return (
         path == "/products"
         or path.startswith("/products/")
+        or path == "/categories"
+        or path.startswith("/categories/")
     )
 
 def is_customer_path(path):
