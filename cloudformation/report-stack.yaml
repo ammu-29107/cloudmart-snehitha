@@ -354,7 +354,7 @@ Resources:
       ScheduleExpressionTimezone: Asia/Kolkata
 
       FlexibleTimeWindow:
-        Mode: OFF
+        Mode: "OFF"
 
       Target:
 
