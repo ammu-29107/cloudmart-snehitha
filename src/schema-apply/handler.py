@@ -200,12 +200,34 @@ DDL_STATEMENTS = [
 
 MIGRATION_STATEMENTS = [
     """
-    ALTER TABLE addresses
-    ADD COLUMN IF NOT EXISTS address_type
-      ENUM('BILLING','SHIPPING')
-      NOT NULL
-      DEFAULT 'SHIPPING'
-      AFTER customer_id
+    SET @address_type_exists = (
+      SELECT COUNT(*)
+      FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE()
+        AND TABLE_NAME = 'addresses'
+        AND COLUMN_NAME = 'address_type'
+    )
+    """,
+
+    """
+    SET @add_address_type_sql = IF(
+      @address_type_exists = 0,
+      'ALTER TABLE addresses ADD COLUMN address_type ENUM(''BILLING'',''SHIPPING'') NOT NULL DEFAULT ''SHIPPING'' AFTER customer_id',
+      'SELECT 1'
+    )
+    """,
+
+    """
+    PREPARE add_address_type_stmt
+    FROM @add_address_type_sql
+    """,
+
+    """
+    EXECUTE add_address_type_stmt
+    """,
+
+    """
+    DEALLOCATE PREPARE add_address_type_stmt
     """
 ]
 
