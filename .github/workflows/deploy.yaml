@@ -17,6 +17,7 @@ on:
       - 'cloudformation/product-stack.yaml'
       - 'cloudformation/order-stack.yaml'
       - 'cloudformation/order-processing-stack.yaml'
+      - 'cloudformation/report-stack.yaml'
 
       - 'src/product/**'
       - 'src/authorizer/**'
@@ -25,6 +26,7 @@ on:
       - 'src/schema-apply/**'
       - 'src/order/**'
       - 'src/order-processing/**'
+      - 'src/report/**'
 
       - '.github/workflows/deploy.yaml'
 
@@ -100,7 +102,8 @@ jobs:
             cloudformation/eventbus-stack.yaml \
             cloudformation/product-stack.yaml \
             cloudformation/order-stack.yaml \
-            cloudformation/order-processing-stack.yaml
+            cloudformation/order-processing-stack.yaml \
+            cloudformation/report-stack.yaml;
           do
 
             echo "Validating $tpl"
@@ -2928,6 +2931,429 @@ jobs:
 
   # ============================================================
   # JOB 8
+  # REPORT STACK
+  # ============================================================
+
+  deploy-report:
+
+    name: Deploy report-stack
+
+    runs-on: ubuntu-latest
+
+    needs:
+      - validate-templates
+      - deploy-order-processing
+
+    env:
+
+      STACK_NAME: cloudmart-${{ needs.validate-templates.outputs.environment }}-report
+
+      TEMPLATE_FILE: cloudformation/report-stack.yaml
+
+      CHANGESET_NAME: cs-report-${{ github.run_id }}-${{ github.run_attempt }}
+
+
+    steps:
+
+      # ========================================================
+      # CHECKOUT
+      # ========================================================
+
+      - uses: actions/checkout@v4
+
+
+      # ========================================================
+      # SETUP PYTHON
+      # ========================================================
+
+      - uses: actions/setup-python@v5
+
+        with:
+
+          python-version: "3.12"
+
+
+      # ========================================================
+      # AWS CREDENTIALS
+      # ========================================================
+
+      - uses: aws-actions/configure-aws-credentials@v4
+
+        with:
+
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+
+          aws-region: ${{ needs.validate-templates.outputs.aws_region }}
+
+
+      # ========================================================
+      # GET LAMBDA ARTIFACT BUCKET
+      # ========================================================
+
+      - name: Get Lambda artifacts bucket name
+
+        id: bucket
+
+        run: |
+
+          BUCKET=$(aws cloudformation list-exports \
+            --query "Exports[?Name=='cloudmart-${{ needs.validate-templates.outputs.environment }}-lambda-artifacts-bucket'].Value" \
+            --output text)
+
+
+          if [ -z "$BUCKET" ] || [ "$BUCKET" = "None" ]; then
+
+            echo "ERROR: Lambda artifacts bucket export not found."
+
+            exit 1
+
+          fi
+
+
+          echo "Lambda artifact bucket: $BUCKET"
+
+          echo "name=$BUCKET" >> "$GITHUB_OUTPUT"
+
+
+      # ========================================================
+      # PACKAGE REPORT LAMBDA
+      # ========================================================
+
+      - name: Package Report Lambda
+
+        run: |
+
+          test -f src/report/handler.py || {
+            echo "ERROR: src/report/handler.py not found."
+            exit 1
+          }
+
+
+          rm -rf build
+
+          mkdir -p build/report
+
+
+          cp src/report/handler.py \
+            build/report/handler.py
+
+
+          pip install pymysql \
+            -t build/report \
+            --break-system-packages
+
+
+          cd build/report
+
+
+          zip -r ../../report.zip .
+
+
+          cd ../..
+
+
+          echo "Uploading Report Lambda package..."
+
+
+          aws s3 cp \
+            report.zip \
+            "s3://${{ steps.bucket.outputs.name }}/${{ needs.validate-templates.outputs.environment }}/report/report-${{ github.sha }}.zip"
+
+
+      # ========================================================
+      # DETERMINE CHANGE SET TYPE
+      # ========================================================
+
+      - name: Determine change set type
+
+        id: stack-check
+
+        run: |
+
+          STACK_STATUS=$(aws cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --query 'Stacks[0].StackStatus' \
+            --output text 2>/dev/null || echo "NOT_FOUND")
+
+
+          echo "Current report stack status: $STACK_STATUS"
+
+
+          case "$STACK_STATUS" in
+
+            NOT_FOUND|REVIEW_IN_PROGRESS)
+
+              echo "changeset_type=CREATE" >> "$GITHUB_OUTPUT"
+
+              ;;
+
+
+            ROLLBACK_COMPLETE|ROLLBACK_FAILED)
+
+              echo "ERROR: Report stack is in $STACK_STATUS."
+
+              echo "Automatic stack deletion is disabled."
+
+              echo "Manual CloudFormation recovery is required."
+
+              exit 1
+
+              ;;
+
+
+            UPDATE_ROLLBACK_IN_PROGRESS|UPDATE_ROLLBACK_FAILED|UPDATE_ROLLBACK_COMPLETE_CLEANUP_IN_PROGRESS|UPDATE_COMPLETE_CLEANUP_IN_PROGRESS)
+
+              echo "ERROR: Report stack is currently in an unstable CloudFormation state."
+
+              echo "Current state: $STACK_STATUS"
+
+              exit 1
+
+              ;;
+
+
+            CREATE_IN_PROGRESS|UPDATE_IN_PROGRESS|IMPORT_IN_PROGRESS|IMPORT_ROLLBACK_IN_PROGRESS)
+
+              echo "ERROR: Report stack is already being modified."
+
+              echo "Current state: $STACK_STATUS"
+
+              exit 1
+
+              ;;
+
+
+            *)
+
+              echo "changeset_type=UPDATE" >> "$GITHUB_OUTPUT"
+
+              ;;
+
+          esac
+
+
+      # ========================================================
+      # CREATE CHANGE SET
+      # ========================================================
+
+      - name: Create report change set
+
+        run: |
+
+          test -s "$TEMPLATE_FILE" || {
+            echo "ERROR: $TEMPLATE_FILE is empty."
+            exit 1
+          }
+
+
+          aws cloudformation create-change-set \
+            --stack-name "$STACK_NAME" \
+            --change-set-name "$CHANGESET_NAME" \
+            --change-set-type "${{ steps.stack-check.outputs.changeset_type }}" \
+            --template-body "file://$TEMPLATE_FILE" \
+            --parameters \
+              ParameterKey=Environment,ParameterValue=${{ needs.validate-templates.outputs.environment }} \
+              ParameterKey=ReportLambdaCodeKey,ParameterValue=${{ needs.validate-templates.outputs.environment }}/report/report-${{ github.sha }}.zip \
+              ParameterKey=LowStockThreshold,ParameterValue=${{ needs.validate-templates.outputs.low_stock_threshold }} \
+            --capabilities CAPABILITY_NAMED_IAM
+
+
+      # ========================================================
+      # WAIT FOR CHANGE SET
+      # ========================================================
+
+      - name: Wait for change set
+
+        run: |
+
+          for i in $(seq 1 20); do
+
+            STATUS=$(aws cloudformation describe-change-set \
+              --stack-name "$STACK_NAME" \
+              --change-set-name "$CHANGESET_NAME" \
+              --query 'Status' \
+              --output text)
+
+
+            REASON=$(aws cloudformation describe-change-set \
+              --stack-name "$STACK_NAME" \
+              --change-set-name "$CHANGESET_NAME" \
+              --query 'StatusReason' \
+              --output text)
+
+
+            echo "Attempt $i/20 - Status: $STATUS"
+
+            echo "Reason: $REASON"
+
+
+            if [ "$STATUS" = "CREATE_COMPLETE" ]; then
+
+              echo "ready=true" >> "$GITHUB_ENV"
+
+              break
+
+
+            elif [ "$STATUS" = "FAILED" ]; then
+
+              echo "======================================================"
+
+              echo "REPORT CHANGE SET FAILED"
+
+              echo "======================================================"
+
+              echo "Reason: $REASON"
+
+
+              aws cloudformation describe-change-set \
+                --stack-name "$STACK_NAME" \
+                --change-set-name "$CHANGESET_NAME" \
+                --output json || true
+
+
+              echo
+
+              echo "Recent report stack events:"
+
+
+              aws cloudformation describe-stack-events \
+                --stack-name "$STACK_NAME" \
+                --query 'StackEvents[:20].{Time:Timestamp,Status:ResourceStatus,Resource:LogicalResourceId,Reason:ResourceStatusReason}' \
+                --output table || true
+
+
+              if echo "$REASON" |
+                grep -qi "didn't contain changes\|No updates"; then
+
+                echo "No changes to deploy."
+
+                echo "ready=nochange" >> "$GITHUB_ENV"
+
+                break
+
+              else
+
+                exit 1
+
+              fi
+
+
+            else
+
+              sleep 15
+
+            fi
+
+          done
+
+
+      # ========================================================
+      # EXECUTE CHANGE SET
+      # ========================================================
+
+      - name: Execute change set
+
+        if: env.ready == 'true'
+
+        run: |
+
+          aws cloudformation execute-change-set \
+            --stack-name "$STACK_NAME" \
+            --change-set-name "$CHANGESET_NAME"
+
+
+      # ========================================================
+      # WAIT FOR REPORT STACK
+      # ========================================================
+
+      - name: Wait for report stack
+
+        if: env.ready == 'true'
+
+        run: |
+
+          for i in $(seq 1 40); do
+
+            STATUS=$(aws cloudformation describe-stacks \
+              --stack-name "$STACK_NAME" \
+              --query 'Stacks[0].StackStatus' \
+              --output text)
+
+
+            echo "Attempt $i/40 - Stack status: $STATUS"
+
+
+            case "$STATUS" in
+
+              CREATE_COMPLETE|UPDATE_COMPLETE)
+
+                echo "Report stack deployed successfully."
+
+                exit 0
+
+                ;;
+
+
+              *IN_PROGRESS)
+
+                sleep 30
+
+                ;;
+
+
+              *FAILED|*ROLLBACK_COMPLETE)
+
+                echo "Report stack failed: $STATUS"
+
+
+                aws cloudformation describe-stack-events \
+                  --stack-name "$STACK_NAME" \
+                  --query 'StackEvents[:20].{Time:Timestamp,Status:ResourceStatus,Resource:LogicalResourceId,Reason:ResourceStatusReason}' \
+                  --output table
+
+
+                exit 1
+
+                ;;
+
+
+              *)
+
+                sleep 30
+
+                ;;
+
+            esac
+
+          done
+
+
+          echo "ERROR: Report stack did not reach a stable state."
+
+          exit 1
+
+
+      # ========================================================
+      # SHOW REPORT RESOURCES
+      # ========================================================
+
+      - name: Show report stack resources
+
+        if: env.ready == 'true' || env.ready == 'nochange'
+
+        run: |
+
+          echo "Report stack resources:"
+
+
+          aws cloudformation describe-stack-resources \
+            --stack-name "$STACK_NAME" \
+            --query 'StackResources[].{LogicalId:LogicalResourceId,Type:ResourceType,Status:ResourceStatus,PhysicalId:PhysicalResourceId}' \
+            --output table
+
+
+  # ============================================================
+  # JOB 9
   # SUMMARY
   # ============================================================
 
@@ -2940,6 +3366,7 @@ jobs:
     needs:
       - validate-templates
       - deploy-order-processing
+      - deploy-report
 
     if: always()
 
