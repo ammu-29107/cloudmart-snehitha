@@ -194,12 +194,34 @@ def is_allowed(role, method, path):
             }
         }
 
-    else:
+    elif is_customer_path(path):
 
         permissions = {
             "PUBLIC": {
                 "POST"
             },
+
+            "CUSTOMER": {
+                "GET",
+                "POST",
+                "PATCH",
+                "PUT",
+                "DELETE"
+            },
+
+            "PRODUCT_OWNER": set(),
+
+            "ADMIN": {
+                "GET",
+                "PUT",
+                "DELETE"
+            }
+        }
+
+    else:
+
+        permissions = {
+            "PUBLIC": set(),
 
             "CUSTOMER": {
                 "GET",

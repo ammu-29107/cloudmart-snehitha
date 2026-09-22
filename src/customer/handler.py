@@ -406,6 +406,612 @@ def handle_password_change(event, body):
             conn.close()
 
 
+def get_authenticated_customer_id(event):
+    request_context = (
+        event.get("requestContext")
+        or {}
+    )
+
+    authorizer_context = (
+        request_context.get("authorizer")
+        or {}
+    )
+
+    role = authorizer_context.get("role")
+    customer_id = authorizer_context.get("customer_id")
+
+    if role != "CUSTOMER" or customer_id is None:
+        return None
+
+    try:
+        return int(customer_id)
+    except (TypeError, ValueError):
+        return None
+
+
+def parse_address_data(body):
+    required_fields = [
+        "address_type",
+        "address_line1",
+        "city",
+        "state",
+        "postal_code",
+        "country"
+    ]
+
+    missing_fields = [
+        field
+        for field in required_fields
+        if not body.get(field)
+    ]
+
+    if missing_fields:
+        return None, (
+            "Missing required field(s): "
+            + ", ".join(missing_fields)
+        )
+
+    address_type = str(body["address_type"]).strip().upper()
+
+    if address_type not in ["BILLING", "SHIPPING"]:
+        return None, "address_type must be BILLING or SHIPPING"
+
+    address_line1 = str(body["address_line1"]).strip()
+    address_line2 = body.get("address_line2")
+
+    if address_line2 is not None:
+        address_line2 = str(address_line2).strip()
+
+    city = str(body["city"]).strip()
+    state = str(body["state"]).strip()
+    postal_code = str(body["postal_code"]).strip()
+    country = str(body["country"]).strip()
+
+    if not address_line1 or not city or not state:
+        return None, "Address fields must not be empty"
+
+    if not postal_code or not country:
+        return None, "Postal code and country are required"
+
+    is_default = body.get("is_default", False)
+
+    if not isinstance(is_default, bool):
+        return None, "is_default must be true or false"
+
+    return {
+        "address_type": address_type,
+        "address_line1": address_line1,
+        "address_line2": address_line2,
+        "city": city,
+        "state": state,
+        "postal_code": postal_code,
+        "country": country,
+        "is_default": is_default
+    }, None
+
+
+def create_address(event, body):
+
+    customer_id = get_authenticated_customer_id(event)
+
+    if customer_id is None:
+        return response(
+            403,
+            False,
+            "Customer authentication is required"
+        )
+
+    address_data, error_message = parse_address_data(body)
+
+    if error_message:
+        return response(
+            400,
+            False,
+            error_message
+        )
+
+    conn = None
+
+    try:
+
+        conn = get_database_connection()
+
+        with conn.cursor() as cur:
+
+            if address_data["is_default"]:
+
+                cur.execute(
+                    """
+                    UPDATE addresses
+                    SET is_default = FALSE
+                    WHERE customer_id = %s
+                      AND address_type = %s
+                    """,
+                    (
+                        customer_id,
+                        address_data["address_type"]
+                    )
+                )
+
+            cur.execute(
+                """
+                INSERT INTO addresses (
+                    customer_id,
+                    address_type,
+                    address_line1,
+                    address_line2,
+                    city,
+                    state,
+                    postal_code,
+                    country,
+                    is_default
+                )
+                VALUES (
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+                    %s
+                )
+                """,
+                (
+                    customer_id,
+                    address_data["address_type"],
+                    address_data["address_line1"],
+                    address_data["address_line2"],
+                    address_data["city"],
+                    address_data["state"],
+                    address_data["postal_code"],
+                    address_data["country"],
+                    address_data["is_default"]
+                )
+            )
+
+            address_id = cur.lastrowid
+
+            conn.commit()
+
+            cur.execute(
+                """
+                SELECT
+                    address_id,
+                    address_type,
+                    address_line1,
+                    address_line2,
+                    city,
+                    state,
+                    postal_code,
+                    country,
+                    is_default
+                FROM addresses
+                WHERE address_id = %s
+                  AND customer_id = %s
+                """,
+                (
+                    address_id,
+                    customer_id
+                )
+            )
+
+            address = cur.fetchone()
+
+        return response(
+            201,
+            True,
+            data=address
+        )
+
+    except Exception:
+
+        if conn is not None:
+            conn.rollback()
+
+        logger.exception("Address creation failed")
+
+        return response(
+            500,
+            False,
+            "Internal server error"
+        )
+
+    finally:
+
+        if conn is not None:
+            conn.close()
+
+
+def get_address(event, address_id):
+
+    customer_id = get_authenticated_customer_id(event)
+
+    if customer_id is None:
+        return response(
+            403,
+            False,
+            "Customer authentication is required"
+        )
+
+    try:
+        address_id = int(address_id)
+    except (TypeError, ValueError):
+        return response(
+            400,
+            False,
+            "Invalid address ID"
+        )
+
+    conn = None
+
+    try:
+
+        conn = get_database_connection()
+
+        with conn.cursor() as cur:
+
+            cur.execute(
+                """
+                SELECT
+                    address_id,
+                    address_type,
+                    address_line1,
+                    address_line2,
+                    city,
+                    state,
+                    postal_code,
+                    country,
+                    is_default
+                FROM addresses
+                WHERE address_id = %s
+                  AND customer_id = %s
+                """,
+                (
+                    address_id,
+                    customer_id
+                )
+            )
+
+            address = cur.fetchone()
+
+        if address is None:
+            return response(
+                404,
+                False,
+                "Address not found"
+            )
+
+        return response(
+            200,
+            True,
+            data=address
+        )
+
+    except Exception:
+
+        logger.exception("Address retrieval failed")
+
+        return response(
+            500,
+            False,
+            "Internal server error"
+        )
+
+    finally:
+
+        if conn is not None:
+            conn.close()
+
+
+def update_address(event, address_id, body):
+
+    customer_id = get_authenticated_customer_id(event)
+
+    if customer_id is None:
+        return response(
+            403,
+            False,
+            "Customer authentication is required"
+        )
+
+    try:
+        address_id = int(address_id)
+    except (TypeError, ValueError):
+        return response(
+            400,
+            False,
+            "Invalid address ID"
+        )
+
+    address_data, error_message = parse_address_data(body)
+
+    if error_message:
+        return response(
+            400,
+            False,
+            error_message
+        )
+
+    conn = None
+
+    try:
+
+        conn = get_database_connection()
+
+        with conn.cursor() as cur:
+
+            cur.execute(
+                """
+                SELECT address_id
+                FROM addresses
+                WHERE address_id = %s
+                  AND customer_id = %s
+                """,
+                (
+                    address_id,
+                    customer_id
+                )
+            )
+
+            existing_address = cur.fetchone()
+
+            if existing_address is None:
+                return response(
+                    404,
+                    False,
+                    "Address not found"
+                )
+
+            if address_data["is_default"]:
+
+                cur.execute(
+                    """
+                    UPDATE addresses
+                    SET is_default = FALSE
+                    WHERE customer_id = %s
+                      AND address_type = %s
+                      AND address_id <> %s
+                    """,
+                    (
+                        customer_id,
+                        address_data["address_type"],
+                        address_id
+                    )
+                )
+
+            cur.execute(
+                """
+                UPDATE addresses
+                SET
+                    address_type = %s,
+                    address_line1 = %s,
+                    address_line2 = %s,
+                    city = %s,
+                    state = %s,
+                    postal_code = %s,
+                    country = %s,
+                    is_default = %s
+                WHERE address_id = %s
+                  AND customer_id = %s
+                """,
+                (
+                    address_data["address_type"],
+                    address_data["address_line1"],
+                    address_data["address_line2"],
+                    address_data["city"],
+                    address_data["state"],
+                    address_data["postal_code"],
+                    address_data["country"],
+                    address_data["is_default"],
+                    address_id,
+                    customer_id
+                )
+            )
+
+            conn.commit()
+
+            cur.execute(
+                """
+                SELECT
+                    address_id,
+                    address_type,
+                    address_line1,
+                    address_line2,
+                    city,
+                    state,
+                    postal_code,
+                    country,
+                    is_default
+                FROM addresses
+                WHERE address_id = %s
+                  AND customer_id = %s
+                """,
+                (
+                    address_id,
+                    customer_id
+                )
+            )
+
+            address = cur.fetchone()
+
+        return response(
+            200,
+            True,
+            data=address
+        )
+
+    except Exception:
+
+        if conn is not None:
+            conn.rollback()
+
+        logger.exception("Address update failed")
+
+        return response(
+            500,
+            False,
+            "Internal server error"
+        )
+
+    finally:
+
+        if conn is not None:
+            conn.close()
+
+
+def delete_address(event, address_id):
+
+    customer_id = get_authenticated_customer_id(event)
+
+    if customer_id is None:
+        return response(
+            403,
+            False,
+            "Customer authentication is required"
+        )
+
+    try:
+        address_id = int(address_id)
+    except (TypeError, ValueError):
+        return response(
+            400,
+            False,
+            "Invalid address ID"
+        )
+
+    conn = None
+
+    try:
+
+        conn = get_database_connection()
+
+        with conn.cursor() as cur:
+
+            cur.execute(
+                """
+                SELECT address_id
+                FROM addresses
+                WHERE address_id = %s
+                  AND customer_id = %s
+                """,
+                (
+                    address_id,
+                    customer_id
+                )
+            )
+
+            existing_address = cur.fetchone()
+
+            if existing_address is None:
+                return response(
+                    404,
+                    False,
+                    "Address not found"
+                )
+
+            cur.execute(
+                """
+                DELETE FROM addresses
+                WHERE address_id = %s
+                  AND customer_id = %s
+                """,
+                (
+                    address_id,
+                    customer_id
+                )
+            )
+
+            conn.commit()
+
+        return response(
+            200,
+            True,
+            message="Address deleted successfully"
+        )
+
+    except Exception:
+
+        if conn is not None:
+            conn.rollback()
+
+        logger.exception("Address deletion failed")
+
+        return response(
+            500,
+            False,
+            "Internal server error"
+        )
+
+    finally:
+
+        if conn is not None:
+            conn.close()
+
+
+def list_addresses(event):
+
+    customer_id = get_authenticated_customer_id(event)
+
+    if customer_id is None:
+        return response(
+            403,
+            False,
+            "Customer authentication is required"
+        )
+
+    conn = None
+
+    try:
+
+        conn = get_database_connection()
+
+        with conn.cursor() as cur:
+
+            cur.execute(
+                """
+                SELECT
+                    address_id,
+                    address_type,
+                    address_line1,
+                    address_line2,
+                    city,
+                    state,
+                    postal_code,
+                    country,
+                    is_default
+                FROM addresses
+                WHERE customer_id = %s
+                ORDER BY address_type, is_default DESC, address_id
+                """,
+                (customer_id,)
+            )
+
+            addresses = cur.fetchall()
+
+        return response(
+            200,
+            True,
+            data=addresses
+        )
+
+    except Exception:
+
+        logger.exception("Address listing failed")
+
+        return response(
+            500,
+            False,
+            "Internal server error"
+        )
+
+    finally:
+
+        if conn is not None:
+            conn.close()
+
+
 def lambda_handler(event, context):
 
     conn = None
@@ -428,21 +1034,31 @@ def lambda_handler(event, context):
 
         body = event.get("body")
 
-        if not body:
-            return response(
-                400,
-                False,
-                "Request body is required"
+        if (
+            method in ["GET", "DELETE"]
+            and (
+                path == "/customers/me/addresses"
+                or path.startswith("/customers/me/addresses/")
             )
+        ):
+            body = {}
 
-        try:
-            body = json.loads(body)
-        except json.JSONDecodeError:
-            return response(
-                400,
-                False,
-                "Request body must be valid JSON"
-            )
+        else:
+            if not body:
+                return response(
+                    400,
+                    False,
+                    "Request body is required"
+                )
+
+            try:
+                body = json.loads(body)
+            except json.JSONDecodeError:
+                return response(
+                    400,
+                    False,
+                    "Request body must be valid JSON"
+                )
 
         if method == "POST" and path == "/login":
             return handle_login(body)
@@ -455,6 +1071,57 @@ def lambda_handler(event, context):
                 event,
                 body
             )
+
+        if (
+            method == "POST"
+            and path == "/customers/me/addresses"
+        ):
+            return create_address(
+                event,
+                body
+            )
+
+        if (
+            method == "GET"
+            and path == "/customers/me/addresses"
+        ):
+            return list_addresses(event)
+
+        if (
+            method == "GET"
+            and path.startswith("/customers/me/addresses/")
+        ):
+            address_id = path.rsplit("/", 1)[-1]
+
+            return get_address(
+                event,
+                address_id
+            )
+
+
+        if (
+            method == "PUT"
+            and path.startswith("/customers/me/addresses/")
+        ):
+            address_id = path.rsplit("/", 1)[-1]
+
+            return update_address(
+                event,
+                address_id,
+                body
+            )
+
+        if (
+            method == "DELETE"
+            and path.startswith("/customers/me/addresses/")
+        ):
+            address_id = path.rsplit("/", 1)[-1]
+
+            return delete_address(
+                event,
+                address_id
+            )
+
 
         if not (method == "POST" and path == "/customers"):
             return response(
