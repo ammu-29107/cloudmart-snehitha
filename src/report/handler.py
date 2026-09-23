@@ -351,12 +351,17 @@ def put_report(
         f"{filename}"
     )
 
+    logger.info("report_s3_upload_start bucket=%s key=%s",
+            REPORT_BUCKET, key)
+
     s3.put_object(
         Bucket=REPORT_BUCKET,
         Key=key,
         Body=csv_content.encode("utf-8"),
         ContentType="text/csv"
     )
+
+    logger.info("report_s3_upload_success")
 
     return key
 
@@ -428,6 +433,9 @@ def lambda_handler(event, context):
             start_utc,
             end_utc
         )
+
+        logger.info("report_data_fetched orders=%s products=%s",
+            len(order_items), len(products))
 
         csv_content = build_csv(
             order_items,
