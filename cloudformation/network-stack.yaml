@@ -262,6 +262,18 @@ Resources:
       SecurityGroupIds:
         - !Ref SgVpce
 
+  CloudWatchInterfaceEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.monitoring
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds:
+        - !Ref PrivateSubnetA
+      SecurityGroupIds:
+        - !Ref SgVpce
+
 Outputs:
   VpcId:
     Value: !Ref Vpc
