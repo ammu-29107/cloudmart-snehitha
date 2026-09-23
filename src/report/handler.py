@@ -43,24 +43,23 @@ def log_json(**kwargs):
 
 
 def get_ssm_parameter(name, decrypt=False):
-    response = ssm.get_parameter(
-        Name=name,
-        WithDecryption=decrypt
-    )
-
+    logger.info("ssm_parameter_start name=%s decrypt=%s", name, decrypt)
+    response = ssm.get_parameter(Name=name, WithDecryption=decrypt)
+    logger.info("ssm_parameter_success name=%s", name)
     return response["Parameter"]["Value"]
 
 
 def get_db_connection():
+    logger.info("db_connection_start")
+
     host = get_ssm_parameter(DB_HOST_PARAM)
     database = get_ssm_parameter(DB_NAME_PARAM)
     username = get_ssm_parameter(DB_USER_PARAM)
-    password = get_ssm_parameter(
-        DB_PASSWORD_PARAM,
-        decrypt=True
-    )
+    password = get_ssm_parameter(DB_PASSWORD_PARAM, decrypt=True)
 
-    return pymysql.connect(
+    logger.info("db_parameters_loaded")
+
+    conn = pymysql.connect(
         host=host,
         user=username,
         password=password,
@@ -69,6 +68,9 @@ def get_db_connection():
         connect_timeout=10,
         autocommit=True
     )
+
+    logger.info("db_connection_success")
+    return conn
 
 
 def get_report_window(mode):
