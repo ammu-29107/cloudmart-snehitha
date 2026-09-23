@@ -59,6 +59,7 @@ jobs:
       environment: ${{ steps.config.outputs.environment }}
       db_instance_class: ${{ steps.config.outputs.db_instance_class }}
       low_stock_threshold: ${{ steps.config.outputs.low_stock_threshold }}
+      s3_prefix_list_id: ${{ steps.config.outputs.s3_prefix_list_id }}
 
     steps:
 
@@ -73,6 +74,7 @@ jobs:
           echo "environment=$(jq -r '.[] | select(.ParameterKey=="Environment") | .ParameterValue' cloudmart-config.json)" >> "$GITHUB_OUTPUT"
           echo "db_instance_class=$(jq -r '.[] | select(.ParameterKey=="DbInstanceClass") | .ParameterValue' cloudmart-config.json)" >> "$GITHUB_OUTPUT"
           echo "low_stock_threshold=$(jq -r '.[] | select(.ParameterKey=="LowStockThreshold") | .ParameterValue' cloudmart-config.json)" >> "$GITHUB_OUTPUT"
+          echo "s3_prefix_list_id=$(jq -r '.[] | select(.ParameterKey=="S3PrefixListId") | .ParameterValue' cloudmart-config.json)" >> "$GITHUB_OUTPUT"
 
 
       - uses: aws-actions/configure-aws-credentials@v4
@@ -204,6 +206,7 @@ jobs:
             --template-body "file://$TEMPLATE_FILE" \
             --parameters \
               ParameterKey=Environment,ParameterValue=${{ needs.validate-templates.outputs.environment }} \
+              ParameterKey=S3PrefixListId,ParameterValue=${{ needs.validate-templates.outputs.s3_prefix_list_id }} \
             --capabilities CAPABILITY_NAMED_IAM
 
 

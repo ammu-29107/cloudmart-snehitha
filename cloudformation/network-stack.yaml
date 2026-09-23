@@ -11,6 +11,9 @@ Parameters:
     Type: String
     AllowedValues: [dev, prod]
 
+  S3PrefixListId:
+    Type: String
+
 Mappings:
   CidrMap:
     dev:
@@ -176,6 +179,15 @@ Resources:
       FromPort: 443
       ToPort: 443
       DestinationSecurityGroupId: !Ref SgVpce
+
+  SgLambdaEgressToS3:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !Ref SgLambda
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      DestinationPrefixListId: !Ref S3PrefixListId
 
   # ---------------- VPC Endpoints ----------------
   S3GatewayEndpoint:

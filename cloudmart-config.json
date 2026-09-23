@@ -14,5 +14,9 @@
   {
     "ParameterKey": "LowStockThreshold",
     "ParameterValue": "10"
+  },
+  {
+    "ParameterKey": "S3PrefixListId",
+    "ParameterValue": "pl-78a54011"
   }
 ]
