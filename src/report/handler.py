@@ -121,6 +121,8 @@ def fetch_report_data(start_utc, end_utc):
 
         with conn.cursor() as cursor:
 
+            logger.info("report_orders_query_start")
+
             cursor.execute(
                 """
                 SELECT
@@ -165,6 +167,10 @@ def fetch_report_data(start_utc, end_utc):
 
             order_items = cursor.fetchall()
 
+            logger.info("report_orders_query_success rows=%s", len(order_items))
+
+            logger.info("report_products_query_start")
+
             cursor.execute(
                 """
                 SELECT
@@ -179,6 +185,8 @@ def fetch_report_data(start_utc, end_utc):
             )
 
             products = cursor.fetchall()
+
+            logger.info("report_products_query_success rows=%s", len(products))
 
         return order_items, products
 
