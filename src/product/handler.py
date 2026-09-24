@@ -15,6 +15,35 @@ logger.setLevel(logging.INFO)
 eventbridge = boto3.client("events")
 sns = boto3.client("sns")
 ssm = boto3.client("ssm")
+cloudwatch = boto3.client("cloudwatch")
+
+def publish_metric(metric_name, value=1):
+    try:
+        cloudwatch.put_metric_data(
+            Namespace="CloudMart/Operations",
+            MetricData=[
+                {
+                    "MetricName": metric_name,
+                    "Dimensions": [
+                        {
+                            "Name": "Environment",
+                            "Value": os.environ.get(
+                                "ENVIRONMENT",
+                                "dev"
+                            )
+                        }
+                    ],
+                    "Value": value,
+                    "Unit": "Count"
+                }
+            ]
+        )
+    except Exception as exc:
+        logger.warning(
+            "Failed to publish metric %s: %s",
+            metric_name,
+            exc
+        )
 
 
 def log_json(**kwargs):
@@ -728,6 +757,8 @@ def publish_low_stock_alert(
             }
         ]
     )
+
+    publish_metric("LowStockEvents")
 
     log_json(
         request_id=request_id,

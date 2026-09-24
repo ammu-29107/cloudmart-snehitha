@@ -10,6 +10,36 @@ logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 ssm = boto3.client("ssm")
+cloudwatch = boto3.client("cloudwatch")
+
+def publish_metric(metric_name, value=1):
+    try:
+        cloudwatch.put_metric_data(
+            Namespace="CloudMart/Operations",
+            MetricData=[
+                {
+                    "MetricName": metric_name,
+                    "Dimensions": [
+                        {
+                            "Name": "Environment",
+                            "Value": os.environ.get(
+                                "ENVIRONMENT",
+                                "dev"
+                            )
+                        }
+                    ],
+                    "Value": value,
+                    "Unit": "Count"
+                }
+            ]
+        )
+    except Exception as exc:
+        logger.warning(
+            "Failed to publish metric %s: %s",
+            metric_name,
+            exc
+        )
+
 events = boto3.client("events")
 ses = boto3.client("sesv2")
 
@@ -545,6 +575,8 @@ def process_order(order_id):
             order_id,
             str(exc)
         )
+
+        publish_metric("OrdersFailed")
 
         mark_idempotency_failed(
             order_id
