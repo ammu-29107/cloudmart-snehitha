@@ -19,6 +19,7 @@ on:
       - 'cloudformation/order-processing-stack.yaml'
       - 'cloudformation/report-stack.yaml'
       - 'cloudformation/monitoring-stack.yaml'
+      - 'dashboard/**'
 
       - 'src/product/**'
       - 'src/authorizer/**'
@@ -3373,6 +3374,31 @@ jobs:
 
           aws-region: ${{ needs.validate-templates.outputs.aws_region }}
 
+      - name: Package dashboard
+        run: |
+          cd dashboard
+          zip -r ../dashboard.zip .
+
+      - name: Get artifacts bucket
+        id: artifacts-bucket
+        run: |
+          BUCKET_NAME=$(aws cloudformation list-exports \
+            --query "Exports[?Name=='cloudmart-${{ needs.validate-templates.outputs.environment }}-lambda-artifacts-bucket'].Value" \
+            --output text)
+
+          if [ -z "$BUCKET_NAME" ] || [ "$BUCKET_NAME" = "None" ]; then
+            echo "ERROR: Lambda artifacts bucket export not found."
+            exit 1
+          fi
+
+          echo "Artifacts bucket: $BUCKET_NAME"
+          echo "name=$BUCKET_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Upload dashboard package
+        run: |
+          aws s3 cp dashboard.zip \
+            "s3://${{ steps.artifacts-bucket.outputs.name }}/${{ needs.validate-templates.outputs.environment }}/dashboard/dashboard-${{ github.sha }}.zip"
+
       # ========================================================
       # DETERMINE CHANGE SET TYPE
       # ========================================================
@@ -3485,6 +3511,7 @@ jobs:
               ParameterKey=Environment,ParameterValue=${{ needs.validate-templates.outputs.environment }} \
               ParameterKey=AlertEmail,ParameterValue="${{ secrets.ALERT_EMAIL }}" \
               ParameterKey=RdsInstanceIdentifier,ParameterValue="$RDS_INSTANCE_ID" \
+              ParameterKey=DashboardCodeKey,ParameterValue=${{ needs.validate-templates.outputs.environment }}/dashboard/dashboard-${{ github.sha }}.zip \
             --capabilities CAPABILITY_NAMED_IAM
 
 
