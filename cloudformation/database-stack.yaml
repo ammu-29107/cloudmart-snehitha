@@ -230,3 +230,11 @@ Outputs:
       Name: !Sub
         - cloudmart-${Environment}-rds-password-param
         - Environment: !Ref Environment
+
+  RdsInstanceIdentifier:
+    Description: RDS DB instance identifier
+    Value: !Ref RdsInstance
+    Export:
+      Name: !Sub
+        - cloudmart-${Environment}-rds-instance-id
+        - Environment: !Ref Environment

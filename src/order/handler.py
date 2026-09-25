@@ -14,8 +14,38 @@ logger.setLevel(logging.INFO)
 
 ssm = boto3.client("ssm")
 sqs = boto3.client("sqs")
-eventbridge = boto3.client("events")
+cloudwatch = boto3.client("cloudwatch")
 
+def publish_metric(metric_name, value=1):
+    try:
+        cloudwatch.put_metric_data(
+            Namespace="CloudMart/Operations",
+            MetricData=[
+                {
+                    "MetricName": metric_name,
+                    "Dimensions": [
+                        {
+                            "Name": "Environment",
+                            "Value": os.environ.get(
+                                "ENVIRONMENT",
+                                "dev"
+                            )
+                        }
+                    ],
+                    "Value": value,
+                    "Unit": "Count"
+                }
+            ]
+        )
+    except Exception as exc:
+        logger.warning("Failed to publish metric %s: %s", metric_name, exc)
+
+eventbridge = boto3.client("events")
+ses = boto3.client("sesv2")
+
+SES_SENDER_EMAIL = os.environ[
+    "SES_SENDER_EMAIL"
+]
 
 # ================================================================
 # HELPERS
@@ -30,6 +60,60 @@ def log_json(**kwargs):
         )
     )
 
+def publish_order_notification(
+    order_id,
+    customer_id,
+    customer_email,
+    previous_status,
+    new_status
+):
+    try:
+        ses.send_email(
+            FromEmailAddress=SES_SENDER_EMAIL,
+            Destination={
+                "ToAddresses": [
+                    customer_email
+                ]
+            },
+            Content={
+                "Simple": {
+                    "Subject": {
+                        "Data": (
+                            f"CloudMart Order "
+                            f"{order_id} Status Update"
+                        )
+                    },
+                    "Body": {
+                        "Text": {
+                            "Data": json.dumps(
+                                {
+                                    "order_id": order_id,
+                                    "customer_id": customer_id,
+                                    "previous_status": previous_status,
+                                    "new_status": new_status
+                                },
+                                indent=4
+                            )
+                        }
+                    }
+                }
+            }
+        )
+
+    except Exception as exc:
+        logger.error(
+            json.dumps(
+                {
+                    "event": "order_notification_failed",
+                    "order_id": order_id,
+                    "customer_id": customer_id,
+                    "previous_status": previous_status,
+                    "new_status": new_status,
+                    "error": str(exc),
+                    "error_type": type(exc).__name__
+                }
+            )
+        )
 
 def get_ssm_parameter(name, decrypt=False):
 
@@ -368,6 +452,24 @@ def get_order_items(
     return prepared_items, total_amount
 
 
+def get_authorizer_context(event):
+
+    request_context = (
+        event.get("requestContext")
+        or {}
+    )
+
+    authorizer_context = (
+        request_context.get("authorizer")
+        or {}
+    )
+
+    return (
+        authorizer_context.get("role"),
+        authorizer_context.get("customer_id")
+    )
+
+
 # ================================================================
 # IDEMPOTENCY
 # ================================================================
@@ -426,7 +528,33 @@ def create_order(
         )
 
 
+    role, authenticated_customer_id = get_authorizer_context(
+        event
+    )
+
     customer_id = body["customer_id"]
+
+    if role == "CUSTOMER":
+
+        if authenticated_customer_id is None:
+
+            return respond(
+                401,
+                {
+                    "success": False,
+                    "message": "Customer identity could not be determined."
+                }
+            )
+
+        if customer_id != authenticated_customer_id:
+
+            return respond(
+                403,
+                {
+                    "success": False,
+                    "message": "You can only create an order for your own customer account."
+                }
+            )
 
     shipping_address_id = body[
         "shipping_address_id"
@@ -670,6 +798,14 @@ def create_order(
 
             conn.commit()
 
+            publish_order_notification(
+                order_id=order_id,
+                customer_id=customer_id,
+                customer_email=customer["email"],
+                previous_status=None,
+                new_status="PENDING"
+            )
+
 
         # ========================================================
         # SEND ORDER TO SQS
@@ -693,9 +829,12 @@ def create_order(
 
             MessageBody=json.dumps(
                 sqs_message
-            )
+            ),
+
+            DelaySeconds=30
         )
 
+        publish_metric("OrdersPlaced")
 
         # ========================================================
         # EVENTBRIDGE ORDER PLACED EVENT
@@ -821,6 +960,609 @@ def create_order(
 
 
 # ================================================================
+# GET ORDER BY ID
+# ================================================================
+
+def get_order_by_id(event):
+
+    path_parameters = event.get("pathParameters") or {}
+
+    order_id = path_parameters.get("orderId")
+
+    if not order_id:
+
+        path = (
+            event.get("rawPath")
+            or event.get("path")
+            or ""
+        )
+
+        path_parts = path.strip("/").split("/")
+
+        if (
+            len(path_parts) == 2
+            and path_parts[0] == "orders"
+        ):
+            order_id = path_parts[1]
+
+    if not order_id:
+
+        return respond(
+            400,
+            {
+                "success": False,
+                "message": "Order ID is required."
+            }
+        )
+
+    try:
+
+        order_id = int(order_id)
+
+    except ValueError:
+
+        return respond(
+            400,
+            {
+                "success": False,
+                "message": "Order ID must be an integer."
+            }
+        )
+
+    conn = None
+
+    role, authenticated_customer_id = get_authorizer_context(
+        event
+    )
+
+    try:
+
+        conn = get_db_connection()
+
+        with conn.cursor() as cursor:
+
+            if role == "CUSTOMER":
+
+                cursor.execute(
+                    """
+                    SELECT
+                        order_id,
+                        customer_id,
+                        shipping_address_id,
+                        billing_address_id,
+                        status,
+                        total_amount,
+                        created_at,
+                        updated_at
+                    FROM orders
+                    WHERE order_id = %s
+                    AND customer_id = %s
+                    """,
+                    (
+                        order_id,
+                        authenticated_customer_id
+                    )
+                )
+
+            else:
+
+                cursor.execute(
+                    """
+                    SELECT
+                        order_id,
+                        customer_id,
+                        shipping_address_id,
+                        billing_address_id,
+                        status,
+                        total_amount,
+                        created_at,
+                        updated_at
+                    FROM orders
+                    WHERE order_id = %s
+                    """,
+                    (order_id,)
+                )
+
+            order = cursor.fetchone()
+
+            if not order:
+
+                conn.rollback()
+
+                return respond(
+                    404,
+                    {
+                        "success": False,
+                        "message": "Order not found."
+                    }
+                )
+
+            cursor.execute(
+                """
+                SELECT
+                    order_item_id,
+                    product_id,
+                    quantity,
+                    unit_price,
+                    subtotal
+                FROM order_items
+                WHERE order_id = %s
+                ORDER BY order_item_id
+                """,
+                (order_id,)
+            )
+
+            items = cursor.fetchall()
+
+        return respond(
+            200,
+            {
+                "success": True,
+                "data": {
+                    "order_id": order["order_id"],
+                    "customer_id": order["customer_id"],
+                    "shipping_address_id": order["shipping_address_id"],
+                    "billing_address_id": order["billing_address_id"],
+                    "status": order["status"],
+                    "total_amount": order["total_amount"],
+                    "created_at": order["created_at"],
+                    "updated_at": order["updated_at"],
+                    "items": items
+                }
+            }
+        )
+
+    except Exception as exc:
+
+        if conn:
+            conn.rollback()
+
+        log_json(
+            event="get_order_failed",
+            order_id=order_id,
+            error=str(exc),
+            error_type=type(exc).__name__
+        )
+
+        return respond(
+            500,
+            {
+                "success": False,
+                "message": "Unable to retrieve order."
+            }
+        )
+
+    finally:
+
+        if conn:
+            conn.close()
+
+
+# ================================================================
+# GET ORDERS BY CUSTOMER
+# ================================================================
+
+def get_orders_by_customer(event):
+
+    role, authenticated_customer_id = get_authorizer_context(
+        event
+    )
+
+    query_parameters = (
+        event.get("queryStringParameters")
+        or {}
+    )
+
+    requested_customer_id = query_parameters.get(
+        "customerId"
+    )
+
+    if role == "CUSTOMER":
+
+        if authenticated_customer_id is None:
+
+            return respond(
+                401,
+                {
+                    "success": False,
+                    "message": "Customer identity could not be determined."
+                }
+            )
+
+        customer_id = authenticated_customer_id
+
+    else:
+
+        if not requested_customer_id:
+
+            return respond(
+                400,
+                {
+                    "success": False,
+                    "message": "customerId is required."
+                }
+            )
+
+        try:
+
+            customer_id = int(
+                requested_customer_id
+            )
+
+        except ValueError:
+
+            return respond(
+                400,
+                {
+                    "success": False,
+                    "message": "customerId must be an integer."
+                }
+            )
+
+    conn = None
+
+    try:
+
+        conn = get_db_connection()
+
+        with conn.cursor() as cursor:
+
+            cursor.execute(
+                """
+                SELECT
+                    order_id,
+                    customer_id,
+                    shipping_address_id,
+                    billing_address_id,
+                    status,
+                    total_amount,
+                    created_at,
+                    updated_at
+                FROM orders
+                WHERE customer_id = %s
+                ORDER BY created_at DESC
+                """,
+                (customer_id,)
+            )
+
+            orders = cursor.fetchall()
+
+        return respond(
+            200,
+            {
+                "success": True,
+                "data": orders
+            }
+        )
+
+    except Exception as exc:
+
+        if conn:
+            conn.rollback()
+
+        log_json(
+            event="get_customer_orders_failed",
+            customer_id=customer_id,
+            error=str(exc),
+            error_type=type(exc).__name__
+        )
+
+        return respond(
+            500,
+            {
+                "success": False,
+                "message": "Unable to retrieve customer orders."
+            }
+        )
+
+    finally:
+
+        if conn:
+            conn.close()
+
+
+# ================================================================
+# CANCEL ORDER
+# ================================================================
+
+def cancel_order(event):
+
+    path_parameters = event.get("pathParameters") or {}
+
+    order_id = path_parameters.get("orderId")
+
+    if not order_id:
+
+        path = (
+            event.get("rawPath")
+            or event.get("path")
+            or ""
+        )
+
+        path_parts = path.strip("/").split("/")
+
+        if (
+            len(path_parts) == 2
+            and path_parts[0] == "orders"
+        ):
+            order_id = path_parts[1]
+
+    if not order_id:
+
+        return respond(
+            400,
+            {
+                "success": False,
+                "message": "Order ID is required."
+            }
+        )
+
+    try:
+
+        order_id = int(order_id)
+
+    except ValueError:
+
+        return respond(
+            400,
+            {
+                "success": False,
+                "message": "Order ID must be an integer."
+            }
+        )
+
+    body = parse_body(event)
+
+    if body is None:
+
+        return respond(
+            400,
+            {
+                "success": False,
+                "message": "Request body must contain valid JSON."
+            }
+        )
+
+    if body.get("status") != "CANCELLED":
+
+        return respond(
+            400,
+            {
+                "success": False,
+                "message": "Only order cancellation is supported."
+            }
+        )
+
+    conn = None
+
+    role, authenticated_customer_id = get_authorizer_context(
+        event
+    )
+
+    try:
+
+        conn = get_db_connection()
+
+        with conn.cursor() as cursor:
+
+            if role == "CUSTOMER":
+
+                cursor.execute(
+                    """
+                    SELECT
+                        order_id,
+                        customer_id,
+                        status,
+                        created_at
+                    FROM orders
+                    WHERE order_id = %s
+                    AND customer_id = %s
+                    FOR UPDATE
+                    """,
+                    (
+                        order_id,
+                        authenticated_customer_id
+                    )
+                )
+
+            else:
+
+                cursor.execute(
+                    """
+                    SELECT
+                        order_id,
+                        customer_id,
+                        status,
+                        created_at
+                    FROM orders
+                    WHERE order_id = %s
+                    FOR UPDATE
+                    """,
+                    (order_id,)
+                )
+
+            order = cursor.fetchone()
+
+            if not order:
+
+                conn.rollback()
+
+                return respond(
+                    404,
+                    {
+                        "success": False,
+                        "message": "Order not found."
+                    }
+                )
+
+            if order["status"] != "PENDING":
+
+                conn.rollback()
+
+                return respond(
+                    400,
+                    {
+                        "success": False,
+                        "message": (
+                            "Only PENDING orders can be cancelled."
+                        )
+                    }
+                )
+
+            cursor.execute(
+                """
+                SELECT
+                    TIMESTAMPDIFF(
+                        SECOND,
+                        created_at,
+                        CURRENT_TIMESTAMP
+                    ) AS age_seconds
+                FROM orders
+                WHERE order_id = %s
+                """,
+                (order_id,)
+            )
+
+            order_age = cursor.fetchone()["age_seconds"]
+
+            if order_age > 15:
+
+                conn.rollback()
+
+                return respond(
+                    400,
+                    {
+                        "success": False,
+                        "message": "Order can no longer be cancelled."
+                    }
+                )
+
+            cursor.execute(
+                """
+                SELECT
+                    email
+                FROM customers
+                WHERE customer_id = %s
+                """,
+                (order["customer_id"],)
+            )
+
+            customer = cursor.fetchone()
+
+
+            cursor.execute(
+                """
+                UPDATE orders
+                SET
+                    status = %s,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE order_id = %s
+                """,
+                (
+                    "CANCELLED",
+                    order_id
+                )
+            )
+
+            cursor.execute(
+                """
+                INSERT INTO order_status_history
+                (
+                    order_id,
+                    previous_status,
+                    new_status
+                )
+                VALUES (%s, %s, %s)
+                """,
+                (
+                    order_id,
+                    "PENDING",
+                    "CANCELLED"
+                )
+            )
+
+            cursor.execute(
+                """
+                UPDATE idempotency_keys
+                SET status = 'CANCELLED'
+                WHERE order_id = %s
+                """,
+                (order_id,)
+            )
+
+            conn.commit()
+
+            publish_order_notification(
+                order_id=order_id,
+                customer_id=order["customer_id"],
+                customer_email=customer["email"],
+                previous_status="PENDING",
+                new_status="CANCELLED"
+            )
+
+        eventbridge.put_events(
+            Entries=[
+                {
+                    "Source": "cloudmart.order",
+                    "DetailType": "OrderCancelled",
+                    "EventBusName": os.environ["EVENT_BUS_NAME"],
+                    "Detail": json.dumps(
+                        {
+                            "event_id": str(uuid.uuid4()),
+                            "event_type": "OrderCancelled",
+                            "order_id": order_id,
+                            "customer_id": order["customer_id"],
+                            "status": "CANCELLED"
+                        }
+                    )
+                }
+            ]
+        )
+
+        log_json(
+            event="order_cancelled",
+            order_id=order_id
+        )
+
+        return respond(
+            200,
+            {
+                "success": True,
+                "message": "Order cancelled successfully.",
+                "data": {
+                    "order_id": order_id,
+                    "status": "CANCELLED"
+                }
+            }
+        )
+
+    except Exception as exc:
+
+        if conn:
+            conn.rollback()
+
+        log_json(
+            event="order_cancellation_failed",
+            order_id=order_id,
+            error=str(exc),
+            error_type=type(exc).__name__
+        )
+
+        return respond(
+            500,
+            {
+                "success": False,
+                "message": "Unable to cancel order."
+            }
+        )
+
+    finally:
+
+        if conn:
+            conn.close()
+
+
+# ================================================================
 # ROUTER
 # ================================================================
 
@@ -882,6 +1624,27 @@ def handler(event, context):
         ):
 
             return create_order(event)
+
+        if (
+            method == "PATCH"
+            and path.startswith("/orders/")
+        ):
+
+            return cancel_order(event)
+
+        if (
+            method == "GET"
+            and path.startswith("/orders/")
+        ):
+
+            return get_order_by_id(event)
+
+        if (
+            method == "GET"
+            and path == "/orders"
+        ):
+
+            return get_orders_by_customer(event)
 
 
         return respond(

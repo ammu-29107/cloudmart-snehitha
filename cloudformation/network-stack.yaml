@@ -11,6 +11,9 @@ Parameters:
     Type: String
     AllowedValues: [dev, prod]
 
+  S3PrefixListId:
+    Type: String
+
 Mappings:
   CidrMap:
     dev:
@@ -177,6 +180,15 @@ Resources:
       ToPort: 443
       DestinationSecurityGroupId: !Ref SgVpce
 
+  SgLambdaEgressToS3:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !Ref SgLambda
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      DestinationPrefixListId: !Ref S3PrefixListId
+
   # ---------------- VPC Endpoints ----------------
   S3GatewayEndpoint:
     Type: AWS::EC2::VPCEndpoint
@@ -216,6 +228,18 @@ Resources:
       SubnetIds: [!Ref PrivateSubnetA]
       SecurityGroupIds: [!Ref SgVpce]
 
+  SesInterfaceEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.email
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds:
+        - !Ref PrivateSubnetA
+      SecurityGroupIds:
+        - !Ref SgVpce
+
   SqsInterfaceEndpoint:
     Type: AWS::EC2::VPCEndpoint
     Properties:
@@ -231,6 +255,18 @@ Resources:
     Properties:
       VpcId: !Ref Vpc
       ServiceName: !Sub com.amazonaws.${AWS::Region}.lambda
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds:
+        - !Ref PrivateSubnetA
+      SecurityGroupIds:
+        - !Ref SgVpce
+
+  CloudWatchInterfaceEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.monitoring
       VpcEndpointType: Interface
       PrivateDnsEnabled: true
       SubnetIds:

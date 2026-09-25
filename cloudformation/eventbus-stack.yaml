@@ -9,6 +9,8 @@ Description: >
 Parameters:
   Environment:
     Type: String
+  AlertEmail:
+    Type: String
 
 Resources:
   EventBus:
@@ -22,6 +24,24 @@ Resources:
       LogGroupName: !Sub /cloudmart/${Environment}/events/low-stock
       RetentionInDays: 14
 
+  OrderEventsLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /cloudmart/${Environment}/events/orders
+      RetentionInDays: 14
+
+  OrderNotificationTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub cloudmart-${Environment}-order-notifications
+
+  OrderEmailSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref OrderNotificationTopic
+      Protocol: email
+      Endpoint: !Ref AlertEmail
+
   LowStockRule:
     Type: AWS::Events::Rule
     Properties:
@@ -33,6 +53,24 @@ Resources:
       Targets:
         - Id: LowStockToLogs
           Arn: !GetAtt LowStockLogGroup.Arn
+
+  OrderEventsRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub cloudmart-${Environment}-order-events-rule
+      EventBusName: !Ref EventBus
+      EventPattern:
+        source:
+          - cloudmart.order
+          - cloudmart.order-processing
+        detail-type:
+          - OrderPlaced
+          - OrderConfirmed
+          - OrderFailed
+          - OrderCancelled
+      Targets:
+        - Id: OrderEventsToLogs
+          Arn: !GetAtt OrderEventsLogGroup.Arn
 
   LowStockLogGroupPolicy:
     Type: AWS::Logs::ResourcePolicy
@@ -53,6 +91,26 @@ Resources:
           }]
         }
 
+  OrderEventsLogGroupPolicy:
+    Type: AWS::Logs::ResourcePolicy
+    Properties:
+      PolicyName: !Sub cloudmart-${Environment}-order-events-logs
+      PolicyDocument: !Sub |
+        {
+          "Version": "2012-10-17",
+          "Statement": [{
+            "Sid": "AllowEventBridgeToWriteOrderLogs",
+            "Effect": "Allow",
+            "Principal": {"Service": "events.amazonaws.com"},
+            "Action": [
+              "logs:CreateLogStream",
+              "logs:PutLogEvents"
+            ],
+            "Resource": "${OrderEventsLogGroup.Arn}:*"
+          }]
+        }
+
+
 Outputs:
   EventBusArn:
     Value: !GetAtt EventBus.Arn
@@ -60,3 +118,8 @@ Outputs:
   EventBusName:
     Value: !Ref EventBus
     Export: {Name: !Sub 'cloudmart-${Environment}-eventbus-name'}
+  OrderNotificationTopicArn:
+    Description: Order notification SNS topic ARN
+    Value: !Ref OrderNotificationTopic
+    Export:
+      Name: !Sub cloudmart-${Environment}-order-notification-topic-arn

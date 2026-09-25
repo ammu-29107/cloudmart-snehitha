@@ -1,9 +1,11 @@
+import hashlib
 import json
 import logging
 import os
 import secrets
 
 import boto3
+import pymysql
 
 
 logger = logging.getLogger()
@@ -14,12 +16,17 @@ ssm = boto3.client("ssm")
 lambda_client = boto3.client("lambda")
 
 
-CUSTOMER_TOKEN_PARAM = os.environ["CUSTOMER_TOKEN_PARAM"]
 PRODUCT_OWNER_TOKEN_PARAM = os.environ["PRODUCT_OWNER_TOKEN_PARAM"]
 ADMIN_TOKEN_PARAM = os.environ["ADMIN_TOKEN_PARAM"]
 
 PRODUCT_FUNCTION_NAME = os.environ["PRODUCT_FUNCTION_NAME"]
 ORDER_FUNCTION_NAME = os.environ["ORDER_FUNCTION_NAME"]
+CUSTOMER_FUNCTION_NAME = os.environ["CUSTOMER_FUNCTION_NAME"]
+
+DB_HOST_PARAM = os.environ["DB_HOST_PARAM"]
+DB_NAME_PARAM = os.environ["DB_NAME_PARAM"]
+DB_USER_PARAM = os.environ["DB_USER_PARAM"]
+DB_PASSWORD_PARAM = os.environ["DB_PASSWORD_PARAM"]
 
 ENVIRONMENT = os.environ.get(
     "ENVIRONMENT",
@@ -38,11 +45,67 @@ def response(status_code, body):
     }
 
 
+def get_customer_id_from_access_token(access_token):
+
+    token_hash = hashlib.sha256(
+        access_token.encode("utf-8")
+    ).hexdigest()
+
+    parameters = ssm.get_parameters(
+        Names=[
+            DB_HOST_PARAM,
+            DB_NAME_PARAM,
+            DB_USER_PARAM,
+            DB_PASSWORD_PARAM
+        ],
+        WithDecryption=True
+    )
+
+    db_parameters = {}
+
+    for parameter in parameters["Parameters"]:
+        db_parameters[parameter["Name"]] = parameter["Value"]
+
+    connection = pymysql.connect(
+        host=db_parameters[DB_HOST_PARAM],
+        user=db_parameters[DB_USER_PARAM],
+        password=db_parameters[DB_PASSWORD_PARAM],
+        database=db_parameters[DB_NAME_PARAM],
+        cursorclass=pymysql.cursors.DictCursor,
+        connect_timeout=5
+    )
+
+    try:
+
+        with connection.cursor() as cursor:
+
+            cursor.execute(
+                """
+                SELECT customer_id
+                FROM customer_access_tokens
+                WHERE token_hash = %s
+                  AND revoked_at IS NULL
+                  AND expires_at > UTC_TIMESTAMP()
+                """,
+                (token_hash,)
+            )
+
+            result = cursor.fetchone()
+
+            if result:
+                return result["customer_id"]
+
+            return None
+
+    finally:
+
+        connection.close()
+
+
 def get_role(supplied_token):
 
     parameters = ssm.get_parameters(
         Names=[
-            CUSTOMER_TOKEN_PARAM,
             PRODUCT_OWNER_TOKEN_PARAM,
             ADMIN_TOKEN_PARAM
         ],
@@ -56,10 +119,7 @@ def get_role(supplied_token):
         name = parameter["Name"]
         value = parameter["Value"]
 
-        if name == CUSTOMER_TOKEN_PARAM:
-            token_roles["CUSTOMER"] = value
-
-        elif name == PRODUCT_OWNER_TOKEN_PARAM:
+        if name == PRODUCT_OWNER_TOKEN_PARAM:
             token_roles["PRODUCT_OWNER"] = value
 
         elif name == ADMIN_TOKEN_PARAM:
@@ -71,26 +131,46 @@ def get_role(supplied_token):
             supplied_token,
             expected_token
         ):
-            return role
+            return role, None
 
-    return None
+    customer_id = get_customer_id_from_access_token(
+        supplied_token
+    )
+
+    if customer_id is not None:
+        return "CUSTOMER", customer_id
+
+    return None, None
 
 
 def is_supported_path(path):
 
     return (
-        path == "/products"
+        path == "/login"
+        or path == "/categories"
+        or path.startswith("/categories/")
+        or path == "/products"
         or path.startswith("/products/")
         or path == "/orders"
         or path.startswith("/orders/")
+        or path == "/customers"
         or path.startswith("/customers/")
     )
 
 def is_product_path(path):
-
     return (
         path == "/products"
         or path.startswith("/products/")
+        or path == "/categories"
+        or path.startswith("/categories/")
+    )
+
+def is_customer_path(path):
+
+    return (
+        path == "/login"
+        or path == "/customers"
+        or path.startswith("/customers/")
     )
 
 def is_allowed(role, method, path):
@@ -117,13 +197,39 @@ def is_allowed(role, method, path):
             }
         }
 
-    else:
+    elif is_customer_path(path):
 
         permissions = {
+            "PUBLIC": {
+                "POST"
+            },
+
             "CUSTOMER": {
                 "GET",
                 "POST",
-                "PUT"
+                "PATCH",
+                "PUT",
+                "DELETE"
+            },
+
+            "PRODUCT_OWNER": set(),
+
+            "ADMIN": {
+                "GET",
+                "PUT",
+                "DELETE"
+            }
+        }
+
+    else:
+
+        permissions = {
+            "PUBLIC": set(),
+
+            "CUSTOMER": {
+                "GET",
+                "POST",
+                "PATCH"
             },
 
             "PRODUCT_OWNER": set(),
@@ -217,6 +323,46 @@ def invoke_order_lambda(event, request_id):
     )
 
 
+def invoke_customer_lambda(event, request_id):
+
+    invoke_response = lambda_client.invoke(
+        FunctionName=CUSTOMER_FUNCTION_NAME,
+        InvocationType="RequestResponse",
+        Payload=json.dumps(event).encode("utf-8")
+    )
+
+    if invoke_response.get("FunctionError"):
+
+        logger.error(
+            json.dumps(
+                {
+                    "request_id": request_id,
+                    "event": "customer_lambda_error",
+                    "function_error": invoke_response[
+                        "FunctionError"
+                    ]
+                }
+            )
+        )
+
+        return response(
+            502,
+            {
+                "authorized": True,
+                "error": {
+                    "code": "CUSTOMER_SERVICE_ERROR",
+                    "message": "Customer service unavailable."
+                }
+            }
+        )
+
+    payload = invoke_response["Payload"].read()
+
+    return json.loads(
+        payload.decode("utf-8")
+    )
+
+
 def lambda_handler(event, context):
 
     request_id = context.aws_request_id
@@ -256,12 +402,47 @@ def lambda_handler(event, context):
 
         headers = event.get("headers") or {}
 
-        supplied_token = (
-            headers.get("X-CloudMart-Token")
-            or headers.get("x-cloudmart-token")
+        authorization_header = (
+            headers.get("Authorization")
+            or headers.get("authorization")
         )
 
-        if not supplied_token:
+        supplied_token = None
+
+        if authorization_header:
+
+            authorization_parts = authorization_header.strip().split(
+                " ",
+                1
+            )
+
+            if (
+                len(authorization_parts) == 2
+                and authorization_parts[0].lower() == "bearer"
+            ):
+                supplied_token = authorization_parts[1].strip()
+
+        if (
+            method == "POST"
+            and path in ["/customers", "/login"]
+            and not supplied_token
+        ):
+
+            role = "PUBLIC"
+            customer_id = None
+
+            logger.info(
+                json.dumps(
+                    {
+                        "request_id": request_id,
+                        "event": "public_customer_registration",
+                        "method": method,
+                        "path": path
+                    }
+                )
+            )
+
+        elif not supplied_token:
 
             logger.info(
                 json.dumps(
@@ -284,60 +465,39 @@ def lambda_handler(event, context):
                 }
             )
 
-        supplied_token = supplied_token.strip()
+        else:
 
-        if not supplied_token:
+            role, customer_id = get_role(supplied_token)
 
-            logger.info(
-                json.dumps(
+            if role is None:
+
+                logger.info(
+                    json.dumps(
+                        {
+                            "request_id": request_id,
+                            "event": "authorization_failed",
+                            "reason": "invalid_token"
+                        }
+                    )
+                )
+
+                return response(
+                    401,
                     {
-                        "request_id": request_id,
-                        "event": "authorization_failed",
-                        "reason": "missing_token"
+                        "authorized": False,
+                        "error": {
+                            "code": "UNAUTHORIZED",
+                            "message": "Invalid authentication credentials."
+                        }
                     }
                 )
-            )
 
-            return response(
-                401,
-                {
-                    "authorized": False,
-                    "error": {
-                        "code": "UNAUTHORIZED",
-                        "message": "Invalid authentication credentials."
-                    }
-                }
-            )
-        
+        request_context["authorizer"] = {
+            "role": role,
+            "customer_id": customer_id
+        }
 
-        # ========================================================
-        # IDENTIFY ROLE
-        # ========================================================
-
-        role = get_role(supplied_token)
-
-        if role is None:
-
-            logger.info(
-                json.dumps(
-                    {
-                        "request_id": request_id,
-                        "event": "authorization_failed",
-                        "reason": "invalid_token"
-                    }
-                )
-            )
-
-            return response(
-                401,
-                {
-                    "authorized": False,
-                    "error": {
-                        "code": "UNAUTHORIZED",
-                        "message": "Invalid authentication credentials."
-                    }
-                }
-            )
+        event["requestContext"] = request_context
 
         logger.info(
             json.dumps(
@@ -430,6 +590,24 @@ def lambda_handler(event, context):
             )
 
             return invoke_product_lambda(event, request_id)
+
+
+        if is_customer_path(path):
+
+            logger.info(
+                json.dumps(
+                    {
+                        "request_id": request_id,
+                        "event": "invoking_customer_lambda",
+                        "role": role,
+                        "method": method,
+                        "path": path
+                    }
+                )
+            )
+
+            return invoke_customer_lambda(event, request_id)
+
 
         logger.info(
             json.dumps(

@@ -1,0 +1,22 @@
+[
+  {
+    "ParameterKey": "Environment",
+    "ParameterValue": "dev"
+  },
+  {
+    "ParameterKey": "AWSRegion",
+    "ParameterValue": "ap-south-1"
+  },
+  {
+    "ParameterKey": "DbInstanceClass",
+    "ParameterValue": "db.t3.micro"
+  },
+  {
+    "ParameterKey": "LowStockThreshold",
+    "ParameterValue": "10"
+  },
+  {
+    "ParameterKey": "S3PrefixListId",
+    "ParameterValue": "pl-78a54011"
+  }
+]

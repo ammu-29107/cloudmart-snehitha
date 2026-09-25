@@ -10,8 +10,9 @@ Parameter Store at runtime.
 
 The password is stored as a SecureString and retrieved with decryption.
 
-Every DDL statement uses IF NOT EXISTS and sample-data inserts use
-INSERT IGNORE, so this Lambda is safe to invoke repeatedly.
+Table creation uses IF NOT EXISTS, and sample-data inserts use
+INSERT IGNORE. The database schema is defined by the final CloudMart
+authentication and order-processing model.
 """
 
 import os
@@ -33,6 +34,32 @@ DDL_STATEMENTS = [
       email VARCHAR(255) NOT NULL UNIQUE,
       phone VARCHAR(20),
       status ENUM('ACTIVE','INACTIVE') NOT NULL DEFAULT 'ACTIVE'
+    )
+    """,
+
+    """
+    CREATE TABLE IF NOT EXISTS customer_credentials (
+      credential_record_id INT AUTO_INCREMENT PRIMARY KEY,
+      customer_id INT NOT NULL UNIQUE,
+      password_hash VARCHAR(255) NOT NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        ON UPDATE CURRENT_TIMESTAMP,
+      FOREIGN KEY (customer_id) REFERENCES customers(customer_id)
+    )
+    """,
+
+    """
+    CREATE TABLE IF NOT EXISTS customer_access_tokens (
+      token_record_id INT AUTO_INCREMENT PRIMARY KEY,
+      customer_id INT NOT NULL,
+      token_hash CHAR(64) NOT NULL UNIQUE,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      expires_at DATETIME NOT NULL,
+      revoked_at DATETIME NULL,
+      FOREIGN KEY (customer_id) REFERENCES customers(customer_id),
+      INDEX idx_customer_access_tokens_customer (customer_id),
+      INDEX idx_customer_access_tokens_expires (expires_at)
     )
     """,
 
@@ -164,15 +191,47 @@ DDL_STATEMENTS = [
     CREATE TABLE IF NOT EXISTS idempotency_keys (
       idempotency_key VARCHAR(64) PRIMARY KEY,
       order_id INT NOT NULL,
-      status ENUM('IN_PROGRESS','COMPLETED') NOT NULL,
+      status ENUM('IN_PROGRESS','COMPLETED', 'FAILED', 'CANCELLED') NOT NULL,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (order_id) REFERENCES orders(order_id)
     )
     """,
 ]
 
+MIGRATION_STATEMENTS = [
+    """
+    SET @address_type_exists = (
+      SELECT COUNT(*)
+      FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE()
+        AND TABLE_NAME = 'addresses'
+        AND COLUMN_NAME = 'address_type'
+    )
+    """,
 
-# Milestone 3 sample data for the review/demo.
+    """
+    SET @add_address_type_sql = IF(
+      @address_type_exists = 0,
+      'ALTER TABLE addresses ADD COLUMN address_type ENUM(''BILLING'',''SHIPPING'') NOT NULL DEFAULT ''SHIPPING'' AFTER customer_id',
+      'SELECT 1'
+    )
+    """,
+
+    """
+    PREPARE add_address_type_stmt
+    FROM @add_address_type_sql
+    """,
+
+    """
+    EXECUTE add_address_type_stmt
+    """,
+
+    """
+    DEALLOCATE PREPARE add_address_type_stmt
+    """
+]
+
+# Baseline catalog data for the CloudMart review/demo.
 SAMPLE_DATA_STATEMENTS = [
     """
     INSERT IGNORE INTO categories (
@@ -231,6 +290,7 @@ SAMPLE_DATA_STATEMENTS = [
 ]
 
 
+
 def get_ssm_parameter(name, with_decryption=False):
     """
     Retrieve a single value from SSM Parameter Store.
@@ -286,10 +346,18 @@ def lambda_handler(event, context):
         )
 
         # ========================================================
-        # APPLY DATABASE SCHEMA
+        # APPLY DATABASE MIGRATIONS
         # ========================================================
 
         with conn.cursor() as cur:
+
+            for stmt in MIGRATION_STATEMENTS:
+
+                cur.execute(stmt)
+
+            # ====================================================
+            # APPLY DATABASE SCHEMA
+            # ====================================================
 
             for stmt in DDL_STATEMENTS:
 

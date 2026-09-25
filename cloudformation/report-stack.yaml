@@ -1,0 +1,416 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Description: >
+  CloudMart report stack — daily operations report Lambda,
+  EventBridge Scheduler, S3 report publishing, RDS access,
+  SSM configuration access, and report generation metrics.
+
+Parameters:
+
+  Environment:
+    Type: String
+    AllowedValues:
+      - dev
+      - prod
+
+  ReportLambdaCodeKey:
+    Type: String
+    Description: >
+      S3 object key containing the packaged report Lambda.
+
+  LowStockThreshold:
+    Type: String
+    Default: '10'
+
+Resources:
+
+  # ============================================================
+  # REPORT LAMBDA LOG GROUP
+  # ============================================================
+
+  ReportLogGroup:
+    Type: AWS::Logs::LogGroup
+
+    Properties:
+      LogGroupName: !Sub
+        - /aws/lambda/${FunctionName}
+        - FunctionName: !Sub
+            - cloudmart-${Environment}-report
+            - Environment: !Ref Environment
+
+      RetentionInDays: 14
+
+
+  # ============================================================
+  # REPORT LAMBDA IAM ROLE
+  # ============================================================
+
+  ReportLambdaRole:
+    Type: AWS::IAM::Role
+
+    Properties:
+
+      RoleName: !Sub
+        - cloudmart-${Environment}-report-role
+        - Environment: !Ref Environment
+
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+
+        Statement:
+          - Effect: Allow
+
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+
+            Action:
+              - sts:AssumeRole
+
+      Policies:
+
+        # --------------------------------------------------------
+        # CloudWatch Logs
+        # --------------------------------------------------------
+
+        - PolicyName: CloudWatchLogs
+
+          PolicyDocument:
+            Version: '2012-10-17'
+
+            Statement:
+              - Effect: Allow
+
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+
+                Resource: !GetAtt ReportLogGroup.Arn
+
+
+        # --------------------------------------------------------
+        # S3 report output
+        # --------------------------------------------------------
+
+        - PolicyName: ReportsBucketWrite
+
+          PolicyDocument:
+            Version: '2012-10-17'
+
+            Statement:
+              - Effect: Allow
+
+                Action:
+                  - s3:PutObject
+
+                Resource:
+                  - !Sub
+                    - arn:${AWS::Partition}:s3:::${ReportsBucket}/reports/*
+                    - ReportsBucket:
+                        Fn::ImportValue: !Sub
+                          - cloudmart-${Environment}-reports-bucket
+                          - Environment: !Ref Environment
+
+
+        # --------------------------------------------------------
+        # SSM database configuration
+        # --------------------------------------------------------
+
+        - PolicyName: DatabaseParametersRead
+
+          PolicyDocument:
+            Version: '2012-10-17'
+
+            Statement:
+
+              - Effect: Allow
+
+                Action:
+                  - ssm:GetParameter
+                  - ssm:GetParameters
+
+                Resource:
+                  - !Sub
+                    - arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudmart/${Environment}/database/host
+                    - Environment: !Ref Environment
+
+                  - !Sub
+                    - arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudmart/${Environment}/database/name
+                    - Environment: !Ref Environment
+
+                  - !Sub
+                    - arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudmart/${Environment}/database/username
+                    - Environment: !Ref Environment
+
+                  - !Sub
+                    - arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudmart/${Environment}/database/password
+                    - Environment: !Ref Environment
+
+
+        # --------------------------------------------------------
+        # KMS decrypt for SSM SecureString
+        # --------------------------------------------------------
+
+        - PolicyName: SsmSecureStringDecrypt
+
+          PolicyDocument:
+            Version: '2012-10-17'
+
+            Statement:
+              - Effect: Allow
+
+                Action:
+                  - kms:Decrypt
+
+                Resource: '*'
+
+
+        # --------------------------------------------------------
+        # CloudWatch custom metrics
+        # --------------------------------------------------------
+
+        - PolicyName: CloudWatchMetrics
+
+          PolicyDocument:
+            Version: '2012-10-17'
+
+            Statement:
+              - Effect: Allow
+
+                Action:
+                  - cloudwatch:PutMetricData
+
+                Resource: '*'
+
+
+        # --------------------------------------------------------
+        # Lambda VPC networking
+        # --------------------------------------------------------
+
+        - PolicyName: LambdaVpcNetworking
+
+          PolicyDocument:
+            Version: '2012-10-17'
+
+            Statement:
+              - Effect: Allow
+
+                Action:
+                  - ec2:CreateNetworkInterface
+                  - ec2:DescribeNetworkInterfaces
+                  - ec2:DeleteNetworkInterface
+
+                Resource: '*'
+
+
+  # ============================================================
+  # REPORT LAMBDA
+  # ============================================================
+
+  ReportLambda:
+    Type: AWS::Lambda::Function
+
+    Properties:
+
+      FunctionName: !Sub
+        - cloudmart-${Environment}-report
+        - Environment: !Ref Environment
+
+      Runtime: python3.12
+
+      Handler: handler.lambda_handler
+
+      Role: !GetAtt ReportLambdaRole.Arn
+
+      Timeout: 120
+
+      MemorySize: 512
+
+      Code:
+
+        S3Bucket:
+          Fn::ImportValue: !Sub
+            - cloudmart-${Environment}-lambda-artifacts-bucket
+            - Environment: !Ref Environment
+
+        S3Key: !Ref ReportLambdaCodeKey
+
+      VpcConfig:
+
+        SubnetIds:
+
+          - Fn::ImportValue: !Sub
+              - cloudmart-${Environment}-private-subnet-a
+              - Environment: !Ref Environment
+
+        SecurityGroupIds:
+
+          - Fn::ImportValue: !Sub
+              - cloudmart-${Environment}-sg-lambda
+              - Environment: !Ref Environment
+
+      Environment:
+
+        Variables:
+
+          ENVIRONMENT: !Ref Environment
+
+          DB_HOST_PARAM: !Sub
+            - /cloudmart/${Environment}/database/host
+            - Environment: !Ref Environment
+
+          DB_NAME_PARAM: !Sub
+            - /cloudmart/${Environment}/database/name
+            - Environment: !Ref Environment
+
+          DB_USER_PARAM: !Sub
+            - /cloudmart/${Environment}/database/username
+            - Environment: !Ref Environment
+
+          DB_PASSWORD_PARAM: !Sub
+            - /cloudmart/${Environment}/database/password
+            - Environment: !Ref Environment
+
+          REPORT_BUCKET:
+            Fn::ImportValue: !Sub
+              - cloudmart-${Environment}-reports-bucket
+              - Environment: !Ref Environment
+
+          REPORT_PREFIX: reports
+
+          REPORT_TIMEZONE: Asia/Kolkata
+
+          LOW_STOCK_THRESHOLD: !Ref LowStockThreshold
+
+
+  # ============================================================
+  # EVENTBRIDGE SCHEDULER IAM ROLE
+  # ============================================================
+
+  ReportSchedulerRole:
+    Type: AWS::IAM::Role
+
+    Properties:
+
+      RoleName: !Sub
+        - cloudmart-${Environment}-report-scheduler-role
+        - Environment: !Ref Environment
+
+      AssumeRolePolicyDocument:
+
+        Version: '2012-10-17'
+
+        Statement:
+
+          - Effect: Allow
+
+            Principal:
+              Service:
+                - scheduler.amazonaws.com
+
+            Action:
+              - sts:AssumeRole
+
+      Policies:
+
+        - PolicyName: InvokeReportLambda
+
+          PolicyDocument:
+
+            Version: '2012-10-17'
+
+            Statement:
+
+              - Effect: Allow
+
+                Action:
+                  - lambda:InvokeFunction
+
+                Resource:
+                  - !GetAtt ReportLambda.Arn
+
+
+  # ============================================================
+  # DAILY REPORT SCHEDULE
+  # ============================================================
+
+  DailyReportSchedule:
+    Type: AWS::Scheduler::Schedule
+
+    Properties:
+
+      Name: !Sub
+        - cloudmart-${Environment}-daily-report
+        - Environment: !Ref Environment
+
+      Description: >
+        Generates the previous day's CloudMart operations report
+        every day at 00:05 Asia/Kolkata.
+
+      State: ENABLED
+
+      ScheduleExpression: cron(5 0 * * ? *)
+
+      ScheduleExpressionTimezone: Asia/Kolkata
+
+      FlexibleTimeWindow:
+        Mode: "OFF"
+
+      Target:
+
+        Arn: !GetAtt ReportLambda.Arn
+
+        RoleArn: !GetAtt ReportSchedulerRole.Arn
+
+        Input: |
+          {
+            "mode": "scheduled"
+          }
+
+
+Outputs:
+
+  ReportLambdaName:
+
+    Description: Report Lambda function name
+
+    Value: !Ref ReportLambda
+
+    Export:
+      Name: !Sub
+        - cloudmart-${Environment}-report-lambda-name
+        - Environment: !Ref Environment
+
+
+  ReportLambdaArn:
+
+    Description: Report Lambda function ARN
+
+    Value: !GetAtt ReportLambda.Arn
+
+    Export:
+      Name: !Sub
+        - cloudmart-${Environment}-report-lambda-arn
+        - Environment: !Ref Environment
+
+
+  DailyReportScheduleArn:
+
+    Description: Daily report EventBridge Scheduler ARN
+
+    Value: !GetAtt DailyReportSchedule.Arn
+
+    Export:
+      Name: !Sub
+        - cloudmart-${Environment}-daily-report-schedule
+        - Environment: !Ref Environment
+
+
+  ReportsBucketName:
+
+    Description: Existing CloudMart reports bucket
+
+    Value:
+      Fn::ImportValue: !Sub
+        - cloudmart-${Environment}-reports-bucket
+        - Environment: !Ref Environment

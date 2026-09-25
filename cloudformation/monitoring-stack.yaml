@@ -1,0 +1,357 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: CloudMart monitoring stack
+
+Parameters:
+  Environment:
+    Type: String
+
+  AlertEmail:
+    Type: String
+
+  RdsInstanceIdentifier:
+    Type: String
+
+  DashboardInstanceType:
+    Type: String
+    Default: t3.micro
+    Description: EC2 instance type for the CloudMart Flask dashboard
+
+  DashboardCodeKey:
+    Type: String
+    Description: S3 key for the CloudMart Flask dashboard package
+
+Resources:
+
+  DashboardEc2Role:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'cloudmart-${Environment}-dashboard-ec2-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - sts:AssumeRole
+
+      Policies:
+        - PolicyName: DashboardReportsRead
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:ListBucket
+                Resource:
+                  - !Sub
+                    - 'arn:${AWS::Partition}:s3:::${ReportsBucket}'
+                    - ReportsBucket:
+                        Fn::ImportValue:
+                          !Sub 'cloudmart-${Environment}-reports-bucket'
+
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                Resource:
+                  - !Sub
+                    - 'arn:${AWS::Partition}:s3:::${ReportsBucket}/reports/*'
+                    - ReportsBucket:
+                        Fn::ImportValue:
+                          !Sub 'cloudmart-${Environment}-reports-bucket'
+
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                Resource:
+                  - !Sub
+                    - 'arn:${AWS::Partition}:s3:::${ArtifactsBucket}/${DashboardCodeKey}'
+                    - ArtifactsBucket:
+                        Fn::ImportValue:
+                          !Sub 'cloudmart-${Environment}-lambda-artifacts-bucket'
+
+  DashboardEc2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: !Sub 'cloudmart-${Environment}-dashboard-ec2-profile'
+      Roles:
+        - !Ref DashboardEc2Role
+
+  DashboardInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: !Ref DashboardInstanceType
+
+      ImageId: ami-066c4849e6b3a1e3d
+
+      SubnetId:
+        Fn::ImportValue:
+          !Sub cloudmart-${Environment}-public-subnet
+
+      SecurityGroupIds:
+        - Fn::ImportValue:
+            !Sub cloudmart-${Environment}-sg-ec2
+
+      IamInstanceProfile: !Ref DashboardEc2InstanceProfile
+
+      Tags:
+        - Key: Name
+          Value: !Sub 'cloudmart-${Environment}-dashboard'
+
+      UserData:
+        Fn::Base64:
+          Fn::Sub:
+            - |
+                #!/bin/bash
+                set -e
+
+                dnf install -y awscli python3 python3-pip unzip
+
+                mkdir -p /opt/cloudmart-dashboard
+
+                aws s3 cp \
+                  s3://${ArtifactsBucket}/${DashboardCodeKey} \
+                  /opt/cloudmart-dashboard/dashboard.zip
+
+                cd /opt/cloudmart-dashboard
+                unzip -o dashboard.zip
+                python3 -m pip install -r /opt/cloudmart-dashboard/requirements.txt
+
+                cat > /etc/systemd/system/cloudmart-dashboard.service <<'SERVICE'
+                [Unit]
+                Description=CloudMart Flask Dashboard
+                After=network-online.target
+                Wants=network-online.target
+
+                [Service]
+                WorkingDirectory=/opt/cloudmart-dashboard
+                ExecStart=/usr/bin/python3 /opt/cloudmart-dashboard/app.py
+                Restart=always
+                RestartSec=5
+                Environment=REPORT_BUCKET=${ReportsBucket}
+                Environment=REPORT_PREFIX=reports/
+                Environment=FLASK_ENV=production
+
+                [Install]
+                WantedBy=multi-user.target
+                SERVICE
+
+                systemctl daemon-reload
+                systemctl enable cloudmart-dashboard
+                systemctl start cloudmart-dashboard
+
+            - ArtifactsBucket:
+                Fn::ImportValue:
+                  Fn::Sub: 'cloudmart-${Environment}-lambda-artifacts-bucket'
+              ReportsBucket:
+                Fn::ImportValue:
+                  Fn::Sub: 'cloudmart-${Environment}-reports-bucket'
+
+  OperationsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub 'cloudmart-${Environment}-operations-alerts'
+
+  OperationsEmailSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref OperationsTopic
+      Protocol: email
+      Endpoint: !Ref AlertEmail
+
+  OrdersFailedAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'cloudmart-${Environment}-orders-failed'
+      Namespace: CloudMart/Operations
+      MetricName: OrdersFailed
+      Dimensions:
+        - Name: Environment
+          Value: !Ref Environment
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref OperationsTopic
+
+  OrderProcessingLambdaErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'cloudmart-${Environment}-order-processing-errors'
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value:
+            Fn::ImportValue: !Sub
+              - cloudmart-${Environment}-order-processing-lambda-name
+              - Environment: !Ref Environment
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref OperationsTopic
+
+  OrderDLQAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'cloudmart-${Environment}-order-dlq'
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: !Sub 'cloudmart-${Environment}-order-dlq'
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref OperationsTopic
+
+  RdsCpuAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'cloudmart-${Environment}-rds-cpu'
+      Namespace: AWS/RDS
+      MetricName: CPUUtilization
+      Dimensions:
+        - Name: DBInstanceIdentifier
+          Value: !Ref RdsInstanceIdentifier
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 70
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref OperationsTopic
+
+  OperationsDashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: !Sub 'cloudmart-operations'
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+            {
+              "type": "metric",
+              "x": 0,
+              "y": 0,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "Lambda Invocations and Errors",
+                "view": "timeSeries",
+                "region": "${AWS::Region}",
+                "period": 300,
+                "stat": "Sum",
+                "metrics": [
+                  [ "AWS/Lambda", "Invocations", "FunctionName", "cloudmart-${Environment}-product" ],
+                  [ ".", "Errors", ".", "cloudmart-${Environment}-product" ],
+                  [ "AWS/Lambda", "Invocations", "FunctionName", "cloudmart-${Environment}-order" ],
+                  [ ".", "Errors", ".", "cloudmart-${Environment}-order" ],
+                  [ "AWS/Lambda", "Invocations", "FunctionName", "cloudmart-${Environment}-order-processing" ],
+                  [ ".", "Errors", ".", "cloudmart-${Environment}-order-processing" ]
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 12,
+              "y": 0,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "Order Queue and DLQ",
+                "view": "timeSeries",
+                "region": "${AWS::Region}",
+                "period": 300,
+                "stat": "Maximum",
+                "metrics": [
+                  [ "AWS/SQS", "ApproximateNumberOfMessagesVisible", "QueueName", "cloudmart-${Environment}-order-queue" ],
+                  [ "AWS/SQS", "ApproximateNumberOfMessagesVisible", "QueueName", "cloudmart-${Environment}-order-dlq" ]
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0,
+              "y": 6,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "RDS Health",
+                "view": "timeSeries",
+                "region": "${AWS::Region}",
+                "period": 300,
+                "stat": "Average",
+                "metrics": [
+                  [ "AWS/RDS", "CPUUtilization", "DBInstanceIdentifier", "${RdsInstanceIdentifier}" ],
+                  [ ".", "DatabaseConnections", ".", "${RdsInstanceIdentifier}" ],
+                  [ ".", "FreeStorageSpace", ".", "${RdsInstanceIdentifier}" ]
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 12,
+              "y": 6,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "CloudMart Business Metrics",
+                "view": "timeSeries",
+                "region": "${AWS::Region}",
+                "namespace": "CloudMart/Operations",
+                "period": 300,
+                "stat": "Sum",
+                "metrics": [
+                  [ "CloudMart/Operations", "OrdersPlaced", "Environment", "${Environment}" ],
+                  [ ".", "OrdersFailed", ".", "${Environment}" ],
+                  [ ".", "LowStockEvents", ".", "${Environment}" ]
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0,
+              "y": 12,
+              "width": 24,
+              "height": 6,
+              "properties": {
+                "title": "Lambda Duration p50 / p90",
+                "view": "timeSeries",
+                "region": "${AWS::Region}",
+                "period": 300,
+                "metrics": [
+                  [ "AWS/Lambda", "Duration", "FunctionName", "cloudmart-${Environment}-product", { "stat": "p50" } ],
+                  [ ".", ".", ".", "cloudmart-${Environment}-product", { "stat": "p90" } ],
+                  [ "AWS/Lambda", "Duration", "FunctionName", "cloudmart-${Environment}-order", { "stat": "p50" } ],
+                  [ ".", ".", ".", "cloudmart-${Environment}-order", { "stat": "p90" } ],
+                  [ "AWS/Lambda", "Duration", "FunctionName", "cloudmart-${Environment}-order-processing", { "stat": "p50" } ],
+                  [ ".", ".", ".", "cloudmart-${Environment}-order-processing", { "stat": "p90" } ]
+                ]
+              }
+            }
+          ]
+        }
+
+Outputs:
+
+  OperationsTopicArn:
+    Value: !Ref OperationsTopic
+    Export:
+      Name: !Sub 'cloudmart-${Environment}-operations-topic-arn'
+
+  DashboardPublicIp:
+    Description: Public IP address of the CloudMart Flask dashboard EC2 instance
+    Value: !GetAtt DashboardInstance.PublicIp

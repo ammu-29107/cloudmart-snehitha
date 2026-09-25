@@ -22,6 +22,10 @@ Parameters:
   OrderCodeKey:
     Type: String
 
+  SesSenderEmail:
+    Type: String
+    Description: Verified SES sender email address.
+
 
 # ================================================================
 # RESOURCES
@@ -181,6 +185,26 @@ Resources:
 
 
         # --------------------------------------------------------
+        # SES ORDER NOTIFICATIONS
+        # --------------------------------------------------------
+
+        - PolicyName: OrderSESSendEmail
+
+          PolicyDocument:
+
+            Version: '2012-10-17'
+
+            Statement:
+
+              - Effect: Allow
+
+                Action:
+                  - ses:SendEmail
+
+                Resource: "*"
+
+
+        # --------------------------------------------------------
         # CLOUDWATCH LOGGING
         # --------------------------------------------------------
 
@@ -297,6 +321,12 @@ Resources:
 
           EVENT_BUS_NAME:
             !Sub cloudmart-${Environment}-bus
+
+
+          # SES ORDER NOTIFICATIONS
+
+          SES_SENDER_EMAIL:
+            !Ref SesSenderEmail
 
 
 # ================================================================
