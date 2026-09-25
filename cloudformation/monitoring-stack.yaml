@@ -146,6 +146,7 @@ Resources:
                 systemctl daemon-reload
                 systemctl enable cloudmart-dashboard
                 systemctl start cloudmart-dashboard
+                systemctl status cloudmart-dashboard --no-pager || true
 
             - ArtifactsBucket:
                 Fn::ImportValue:
