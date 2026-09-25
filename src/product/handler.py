@@ -91,6 +91,11 @@ def get_db_connection():
 
 def respond(status, body, request_id):
 
+    if 400 <= status < 500:
+        publish_metric("HTTP4xx")
+    elif status >= 500:
+        publish_metric("HTTP5xx")
+
     return {
         "statusCode": status,
         "headers": {

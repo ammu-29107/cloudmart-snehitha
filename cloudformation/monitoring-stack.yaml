@@ -178,6 +178,42 @@ Resources:
       AlarmActions:
         - !Ref OperationsTopic
 
+  HTTP4xxAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'cloudmart-${Environment}-http-4xx'
+      Namespace: CloudMart/Operations
+      MetricName: HTTP4xx
+      Dimensions:
+        - Name: Environment
+          Value: !Ref Environment
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref OperationsTopic
+
+  HTTP5xxAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'cloudmart-${Environment}-http-5xx'
+      Namespace: CloudMart/Operations
+      MetricName: HTTP5xx
+      Dimensions:
+        - Name: Environment
+          Value: !Ref Environment
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref OperationsTopic
+
   OrderProcessingLambdaErrorAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
@@ -195,6 +231,81 @@ Resources:
       EvaluationPeriods: 1
       Threshold: 1
       ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref OperationsTopic
+
+  ProductLambdaErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'cloudmart-${Environment}-product-errors'
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Sub 'cloudmart-${Environment}-product'
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref OperationsTopic
+
+  OrderLambdaErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'cloudmart-${Environment}-order-errors'
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Sub 'cloudmart-${Environment}-order'
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref OperationsTopic
+
+  OrderProcessingLambdaThrottleAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'cloudmart-${Environment}-order-processing-throttles'
+      Namespace: AWS/Lambda
+      MetricName: Throttles
+      Dimensions:
+        - Name: FunctionName
+          Value:
+            Fn::ImportValue: !Sub
+              - cloudmart-${Environment}-order-processing-lambda-name
+              - Environment: !Ref Environment
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref OperationsTopic
+
+  DashboardEc2HealthAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'cloudmart-${Environment}-dashboard-ec2-health'
+      Namespace: AWS/EC2
+      MetricName: StatusCheckFailed
+      Dimensions:
+        - Name: InstanceId
+          Value: !Ref DashboardInstance
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
       TreatMissingData: notBreaching
       AlarmActions:
         - !Ref OperationsTopic
@@ -231,6 +342,24 @@ Resources:
       EvaluationPeriods: 1
       Threshold: 70
       ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref OperationsTopic
+
+  RdsFreeStorageAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'cloudmart-${Environment}-rds-free-storage'
+      Namespace: AWS/RDS
+      MetricName: FreeStorageSpace
+      Dimensions:
+        - Name: DBInstanceIdentifier
+          Value: !Ref RdsInstanceIdentifier
+      Statistic: Minimum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1073741824
+      ComparisonOperator: LessThanThreshold
       TreatMissingData: notBreaching
       AlarmActions:
         - !Ref OperationsTopic
@@ -317,7 +446,10 @@ Resources:
                 "metrics": [
                   [ "CloudMart/Operations", "OrdersPlaced", "Environment", "${Environment}" ],
                   [ ".", "OrdersFailed", ".", "${Environment}" ],
-                  [ ".", "LowStockEvents", ".", "${Environment}" ]
+                  [ ".", "OrderCancelled", ".", "${Environment}" ],
+                  [ ".", "LowStockEvents", ".", "${Environment}" ],
+                  [ ".", "HTTP4xx", ".", "${Environment}" ],
+                  [ ".", "HTTP5xx", ".", "${Environment}" ]
                 ]
               }
             },
@@ -339,6 +471,42 @@ Resources:
                   [ ".", ".", ".", "cloudmart-${Environment}-order", { "stat": "p90" } ],
                   [ "AWS/Lambda", "Duration", "FunctionName", "cloudmart-${Environment}-order-processing", { "stat": "p50" } ],
                   [ ".", ".", ".", "cloudmart-${Environment}-order-processing", { "stat": "p90" } ]
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0,
+              "y": 18,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "Lambda Throttles",
+                "view": "timeSeries",
+                "region": "${AWS::Region}",
+                "period": 300,
+                "stat": "Sum",
+                "metrics": [
+                  [ "AWS/Lambda", "Throttles", "FunctionName", "cloudmart-${Environment}-product" ],
+                  [ ".", ".", ".", "cloudmart-${Environment}-order" ],
+                  [ ".", ".", ".", "cloudmart-${Environment}-order-processing" ]
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 12,
+              "y": 18,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "Dashboard EC2 Health",
+                "view": "timeSeries",
+                "region": "${AWS::Region}",
+                "period": 300,
+                "stat": "Maximum",
+                "metrics": [
+                  [ "AWS/EC2", "StatusCheckFailed", "InstanceId", "${DashboardInstance}" ]
                 ]
               }
             }
