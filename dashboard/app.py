@@ -4,12 +4,43 @@ import os
 from collections import Counter
 
 import boto3
-from flask import Flask, render_template_string, url_for
+from flask import (
+    Flask,
+    render_template_string,
+    url_for,
+    request,
+    redirect,
+    session
+)
 
 
 app = Flask(__name__)
 
+app.secret_key = os.environ.get(
+    "FLASK_SECRET_KEY",
+    "cloudmart-dashboard-secret"
+)
+
 s3 = boto3.client("s3")
+
+ssm = boto3.client("ssm")
+
+ENVIRONMENT = os.environ.get(
+    "ENVIRONMENT",
+    "dev"
+)
+
+ADMIN_TOKEN_PARAMETER = os.environ.get(
+    "ADMIN_TOKEN_PARAMETER",
+    f"/cloudmart/{ENVIRONMENT}/auth/admin-token"
+)
+
+def get_admin_token():
+    response = ssm.get_parameter(
+        Name=ADMIN_TOKEN_PARAMETER,
+        WithDecryption=True
+    )
+    return response["Parameter"]["Value"]
 
 
 REPORT_BUCKET = os.environ.get(
@@ -22,6 +53,124 @@ REPORT_PREFIX = os.environ.get(
     "reports/"
 )
 
+LOGIN_HTML = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CloudMart Login</title>
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #f5f7fb;
+            font-family: Arial, sans-serif;
+        }
+
+        .login-card {
+            width: 360px;
+            padding: 32px;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 8px 30px rgba(0, 0, 0, 0.08);
+        }
+
+        .brand {
+            text-align: center;
+            margin-bottom: 24px;
+        }
+
+        .brand h1 {
+            margin: 0 0 6px;
+            font-size: 28px;
+        }
+
+        .brand p {
+            margin: 0;
+            color: #667085;
+        }
+
+        label {
+            display: block;
+            margin: 14px 0 6px;
+            font-weight: 600;
+        }
+
+        input {
+            width: 100%;
+            padding: 11px 12px;
+            border: 1px solid #d0d5dd;
+            border-radius: 6px;
+            font-size: 14px;
+        }
+
+        button {
+            width: 100%;
+            margin-top: 22px;
+            padding: 12px;
+            border: 0;
+            border-radius: 6px;
+            background: #1d4ed8;
+            color: white;
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+
+        .error {
+            margin-bottom: 16px;
+            padding: 10px;
+            border-radius: 6px;
+            background: #fef2f2;
+            color: #b42318;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div class="login-card">
+        <div class="brand">
+            <h1>CloudMart</h1>
+            <p>Operations Dashboard</p>
+        </div>
+
+        {% if error %}
+            <div class="error">{{ error }}</div>
+        {% endif %}
+
+        <form method="POST" action="{{ url_for('login') }}">
+            <label for="username">Username</label>
+            <input
+                type="text"
+                id="username"
+                name="username"
+                autocomplete="username"
+                required
+            >
+
+            <label for="password">Password</label>
+            <input
+                type="password"
+                id="password"
+                name="password"
+                autocomplete="current-password"
+                required
+            >
+
+            <button type="submit">Sign In</button>
+        </form>
+    </div>
+</body>
+</html>
+"""
 
 HTML = """
 <!DOCTYPE html>
@@ -1342,6 +1491,17 @@ HTML = """
 
                 <span class="nav-icon">◉</span>
                 <span>System Status</span>
+
+            </a>
+
+        </nav>
+
+        <nav class="nav">
+
+            <a class="nav-link" href="{{ url_for('logout') }}">
+
+                <span class="nav-icon">↪</span>
+                <span>Logout</span>
 
             </a>
 
@@ -3200,6 +3360,54 @@ def load_report():
         "previous_reports": previous_reports
     }
 
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if request.method == "GET":
+        return render_template_string(LOGIN_HTML, error=None)
+
+    username = request.form.get("username", "").strip()
+    password = request.form.get("password", "")
+
+    if username != "admin":
+        return render_template_string(
+            LOGIN_HTML,
+            error="Invalid username or password."
+        ), 401
+
+    try:
+        admin_token = get_admin_token()
+    except Exception:
+        app.logger.exception("Unable to retrieve dashboard admin token")
+        return render_template_string(
+            LOGIN_HTML,
+            error="Login service is unavailable."
+        ), 500
+
+    if password != admin_token:
+        return render_template_string(
+            LOGIN_HTML,
+            error="Invalid username or password."
+        ), 401
+
+    session["authenticated"] = True
+    session["username"] = username
+
+    return redirect(url_for("dashboard"))
+
+@app.before_request
+def require_login():
+    if request.path == "/login":
+        return None
+
+    if not session.get("authenticated"):
+        return redirect(url_for("login"))
+
+    return None
+
+@app.route("/logout")
+def logout():
+    session.clear()
+    return redirect(url_for("login"))
 
 @app.route("/")
 def dashboard():
