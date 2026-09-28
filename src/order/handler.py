@@ -40,6 +40,12 @@ def publish_metric(metric_name, value=1):
     except Exception as exc:
         logger.warning("Failed to publish metric %s: %s", metric_name, exc)
 
+def publish_http_metric(status_code):
+    if 400 <= status_code < 500:
+        publish_metric("HTTP4xx")
+    elif status_code >= 500:
+        publish_metric("HTTP5xx")
+
 eventbridge = boto3.client("events")
 ses = boto3.client("sesv2")
 
@@ -156,6 +162,8 @@ def get_db_connection():
 
 
 def respond(status, body):
+
+    publish_http_metric(status)
 
     return {
         "statusCode": status,
@@ -1524,6 +1532,8 @@ def cancel_order(event):
             order_id=order_id
         )
 
+        publish_metric("OrderCancelled")
+
         return respond(
             200,
             {
@@ -1648,18 +1658,13 @@ def handler(event, context):
 
 
         return respond(
-
             404,
-
             {
-
                 "success": False,
-
                 "message":
                     "No matching route."
             }
         )
-
 
     except Exception as exc:
 
@@ -1676,13 +1681,9 @@ def handler(event, context):
 
 
         return respond(
-
             500,
-
             {
-
                 "success": False,
-
                 "message":
                     "Unexpected error."
             }

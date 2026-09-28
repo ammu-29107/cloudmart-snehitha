@@ -138,6 +138,7 @@ Resources:
       VpcId: !Ref Vpc
       SecurityGroupIngress:
         - {IpProtocol: tcp, FromPort: 443, ToPort: 443, SourceSecurityGroupId: !Ref SgLambda}
+        - {IpProtocol: tcp, FromPort: 443, ToPort: 443, SourceSecurityGroupId: !Ref SgEc2}
       Tags:
         - {Key: Name, Value: !Sub 'cloudmart-${Environment}-sg-vpce'}
 
