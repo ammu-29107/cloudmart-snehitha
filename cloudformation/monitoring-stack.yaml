@@ -135,9 +135,12 @@ Resources:
                 ExecStart=/usr/bin/python3 /opt/cloudmart-dashboard/app.py
                 Restart=always
                 RestartSec=5
+                StandardOutput=append:/var/log/cloudmart-dashboard.log
+                StandardError=append:/var/log/cloudmart-dashboard.log
                 Environment=REPORT_BUCKET=${ReportsBucket}
                 Environment=REPORT_PREFIX=reports/
                 Environment=FLASK_ENV=production
+                Environment=ENVIRONMENT=${Environment}
 
                 [Install]
                 WantedBy=multi-user.target
@@ -146,6 +149,12 @@ Resources:
                 systemctl daemon-reload
                 systemctl enable cloudmart-dashboard
                 systemctl start cloudmart-dashboard
+                systemctl status cloudmart-dashboard --no-pager || true
+
+                sleep 5
+                echo "===== CLOUDMART DASHBOARD LOG ====="
+                cat /var/log/cloudmart-dashboard.log || true
+                echo "===== CLOUDMART DASHBOARD SERVICE STATUS ====="
                 systemctl status cloudmart-dashboard --no-pager || true
 
             - ArtifactsBucket:
@@ -374,7 +383,7 @@ Resources:
   OperationsDashboard:
     Type: AWS::CloudWatch::Dashboard
     Properties:
-      DashboardName: !Sub 'cloudmart-operations'
+      DashboardName: !Sub 'cloudmart-${Environment}-operations'
       DashboardBody: !Sub |
         {
           "widgets": [
