@@ -141,6 +141,7 @@ Resources:
                 Environment=REPORT_PREFIX=reports/
                 Environment=FLASK_ENV=production
                 Environment=ENVIRONMENT=${Environment}
+                Environment=AWS_DEFAULT_REGION=${AWS::Region}
 
                 [Install]
                 WantedBy=multi-user.target
