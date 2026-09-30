@@ -725,15 +725,19 @@ def deactivate_category(event, request_id):
 def publish_low_stock_alert(
     product_id,
     stock_quantity,
-    request_id
+    request_id,
+    low_stock_threshold
 ):
 
     sns.publish(
         TopicArn=os.environ["LOW_STOCK_TOPIC_ARN"],
         Subject="CloudMart low stock alert",
         Message=(
-            f"Product {product_id} has only "
-            f"{stock_quantity} unit(s) left."
+            "CloudMart Low Stock Alert\n\n"
+            f"Product ID: {product_id}\n"
+            f"Current Stock: {stock_quantity} unit(s)\n"
+            f"Low Stock Threshold: {low_stock_threshold} unit(s)\n\n"
+            "Action required: Please restock this product."
         ),
     )
 
@@ -882,7 +886,8 @@ def create_product(event, request_id):
         publish_low_stock_alert(
             product_id,
             body["stock_quantity"],
-            request_id
+            request_id,
+            get_low_stock_threshold()
         )
 
     return respond(
@@ -1228,7 +1233,8 @@ def update_product(event, request_id):
         publish_low_stock_alert(
             product_id,
             new_stock,
-            request_id
+            request_id,
+            get_low_stock_threshold()
         )
 
     return respond(

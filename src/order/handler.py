@@ -71,9 +71,64 @@ def publish_order_notification(
     customer_id,
     customer_email,
     previous_status,
-    new_status
+    new_status,
+    items=None,
+    total_amount=None,
+    failure_reason=None
 ):
     try:
+        if new_status == "PENDING":
+            body_lines = [
+                "CloudMart Order Created",
+                "",
+                f"Order ID: {order_id}",
+                f"Customer ID: {customer_id}",
+                "",
+                "Items",
+                "--------------------------------"
+            ]
+
+            for item in items or []:
+                body_lines.extend(
+                    [
+                        f"Product: {item['product_name']}",
+                        f"Quantity: {item['quantity']}",
+                        f"Unit Price: {item['unit_price']}",
+                        f"Subtotal: {item['subtotal']}",
+                        ""
+                    ]
+                )
+
+            body_lines.extend(
+                [
+                    "--------------------------------",
+                    f"Total: {total_amount}",
+                    "",
+                    "Current Status: PENDING",
+                    "",
+                    "Your order has been successfully created "
+                    "and is currently pending processing."
+                ]
+            )
+
+        else:
+            body_lines = [
+                f"CloudMart Order {new_status}",
+                "",
+                f"Order ID: {order_id}",
+                f"Customer ID: {customer_id}",
+                f"Previous Status: {previous_status}",
+                f"Current Status: {new_status}"
+            ]
+
+            if failure_reason:
+                body_lines.extend(
+                    [
+                        "",
+                        f"Reason: {failure_reason}"
+                    ]
+                )
+
         ses.send_email(
             FromEmailAddress=SES_SENDER_EMAIL,
             Destination={
@@ -86,20 +141,12 @@ def publish_order_notification(
                     "Subject": {
                         "Data": (
                             f"CloudMart Order "
-                            f"{order_id} Status Update"
+                            f"{order_id} - {new_status}"
                         )
                     },
                     "Body": {
                         "Text": {
-                            "Data": json.dumps(
-                                {
-                                    "order_id": order_id,
-                                    "customer_id": customer_id,
-                                    "previous_status": previous_status,
-                                    "new_status": new_status
-                                },
-                                indent=4
-                            )
+                            "Data": "\n".join(body_lines)
                         }
                     }
                 }
@@ -447,6 +494,7 @@ def get_order_items(
         prepared_items.append(
             {
                 "product_id": product["product_id"],
+                "product_name": product["product_name"],
                 "quantity": quantity,
                 "unit_price": unit_price,
                 "subtotal": subtotal
@@ -811,7 +859,9 @@ def create_order(
                 customer_id=customer_id,
                 customer_email=customer["email"],
                 previous_status=None,
-                new_status="PENDING"
+                new_status="PENDING",
+                items=prepared_items,
+                total_amount=total_amount
             )
 
 

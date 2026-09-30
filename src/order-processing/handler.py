@@ -394,14 +394,6 @@ def process_order(order_id):
 
             connection.commit()
 
-            publish_order_notification(
-                order_id=order_id,
-                customer_id=order["customer_id"],
-                customer_email=customer_email,
-                previous_status="PENDING",
-                new_status="PROCESSING"
-            )
-
             # ----------------------------------------------------
             # Read order items.
             # ----------------------------------------------------
@@ -566,6 +558,7 @@ def process_order(order_id):
         #
         # Then mark the order FAILED in a separate transaction.
         # --------------------------------------------------------
+        reason = str(exc)
 
         connection.rollback()
 
@@ -587,7 +580,8 @@ def process_order(order_id):
             customer_id=failure_customer_id,
             customer_email=customer_email,
             previous_status="PROCESSING",
-            new_status="FAILED"
+            new_status="FAILED",
+            failure_reason=reason
         )
 
         publish_event(
