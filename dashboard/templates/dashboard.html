@@ -1,0 +1,1787 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>CloudMart Operations Dashboard</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='dashboard.css') }}">
+</head>
+
+<body class="login-page">
+
+<div class="app">
+
+    <!-- =========================
+         SIDEBAR
+         ========================= -->
+
+    <aside class="sidebar">
+
+        <div class="brand">
+
+            <div class="brand-icon">
+                C
+            </div>
+
+            <div class="brand-text">
+
+                <div class="brand-name">
+                    CloudMart
+                </div>
+
+                <div class="brand-subtitle">
+                    Operations Console
+                </div>
+
+            </div>
+
+        </div>
+
+
+        <div class="nav-label">
+            Workspace
+        </div>
+
+
+        <nav class="nav">
+
+            <a class="nav-link active" href="#overview">
+
+                <span class="nav-icon">⌂</span>
+                <span>Overview</span>
+
+            </a>
+
+
+            <a class="nav-link" href="#orders">
+
+                <span class="nav-icon">▣</span>
+                <span>Orders</span>
+
+            </a>
+
+
+            <a class="nav-link" href="#inventory">
+
+                <span class="nav-icon">▤</span>
+                <span>Inventory</span>
+
+            </a>
+
+
+            <a class="nav-link" href="#reports">
+
+                <span class="nav-icon">◫</span>
+                <span>Reports</span>
+
+            </a>
+
+        </nav>
+
+
+        <div class="nav-label">
+            System
+        </div>
+
+
+        <nav class="nav">
+
+            <a class="nav-link" href="#overview">
+
+                <span class="nav-icon">◉</span>
+                <span>System Status</span>
+
+            </a>
+
+        </nav>
+
+        <nav class="nav">
+
+            <a class="nav-link" href="{{ url_for('logout') }}">
+
+                <span class="nav-icon">↪</span>
+                <span>Logout</span>
+
+            </a>
+
+        </nav>
+
+
+        <div class="sidebar-bottom">
+
+            <div class="system-status">
+
+                <div class="system-status-title">
+                    CloudMart Platform
+                </div>
+
+                <div class="status-online">
+
+                    <span class="online-dot"></span>
+
+                    <span>Dashboard Online</span>
+
+                </div>
+
+            </div>
+
+        </div>
+
+    </aside>
+
+
+    <!-- =========================
+         MAIN
+         ========================= -->
+
+    <main class="main">
+
+        <header class="topbar">
+
+            <div>
+
+                <div class="page-title">
+                    Operations Dashboard
+                </div>
+
+                <div class="page-subtitle">
+                    Monitor orders, inventory and daily reporting
+                </div>
+
+            </div>
+
+
+            <div class="topbar-right">
+                <button
+                    type="button"
+                    class="theme-toggle"
+                    id="themeToggle"
+                    aria-label="Toggle dark mode"
+                    title="Toggle dark mode"
+                >
+                    <span id="themeIcon">🌙</span>
+                    <span id="themeLabel">Dark Mode</span>
+                </button>
+
+                <div class="environment">
+                    <span class="environment-dot"></span>
+                    {{ environment or "Unknown" }}
+                </div>
+            </div>
+
+        </header>
+
+
+        <div class="container" id="overview">
+
+
+            {% if error %}
+
+                <div class="error">
+
+                    <div class="error-title">
+                        Unable to load dashboard data
+                    </div>
+
+                    <div class="error-detail">
+                        {{ error }}
+                    </div>
+
+                </div>
+
+            {% else %}
+
+
+                <!-- =========================
+                     HERO
+                     ========================= -->
+
+                <section class="hero">
+
+                    <div class="hero-content">
+
+                        <div>
+
+                            <div class="hero-kicker">
+                                CloudMart Operations
+                            </div>
+
+                            <h1>
+                                Daily business overview
+                            </h1>
+
+                            <p>
+                                Monitor your latest orders, inventory health
+                                and generated reports from one place.
+                            </p>
+
+                        </div>
+
+
+                        <div class="hero-actions">
+
+                            <button
+                                class="button button-light"
+                                onclick="openLatestReport()"
+                            >
+                                ◉ View Report
+                            </button>
+
+
+                            <a
+                                class="button button-primary"
+                                href="{{ url_for('download_report') }}"
+                                onclick="showToast('Report download started')"
+                            >
+                                ↓ Download CSV
+                            </a>
+
+                        </div>
+
+                    </div>
+
+                </section>
+
+
+                <!-- =========================
+                     KPI CARDS
+                     ========================= -->
+
+                <div class="section-heading">
+
+                    <h2>
+                        Business Snapshot
+                    </h2>
+
+                    <span>
+                        Latest report
+                    </span>
+
+                </div>
+
+
+                <div class="kpi-grid">
+
+
+                    <div class="kpi-card">
+
+                        <div class="kpi-top">
+
+                            <div class="kpi-label">
+                                Total Products
+                            </div>
+
+                            <div class="kpi-icon icon-blue">
+                                ▤
+                            </div>
+
+                        </div>
+
+                        <div class="kpi-value">
+                            {{ products|length }}
+                        </div>
+
+                        <div class="kpi-note">
+                            Products in latest report
+                        </div>
+
+                    </div>
+
+
+                    <div class="kpi-card">
+
+                        <div class="kpi-top">
+
+                            <div class="kpi-label">
+                                Low Stock
+                            </div>
+
+                            <div class="kpi-icon icon-orange">
+                                !
+                            </div>
+
+                        </div>
+
+                        <div class="kpi-value">
+                            {{ low_stock_count }}
+                        </div>
+
+                        <div class="kpi-note">
+                            Products requiring attention
+                        </div>
+
+                    </div>
+
+
+                    <div class="kpi-card">
+
+                        <div class="kpi-top">
+
+                            <div class="kpi-label">
+                                Order Items
+                            </div>
+
+                            <div class="kpi-icon icon-purple">
+                                #
+                            </div>
+
+                        </div>
+
+                        <div class="kpi-value">
+                            {{ orders|length }}
+                        </div>
+
+                        <div class="kpi-note">
+                            Order item records
+                        </div>
+
+                    </div>
+
+
+                    <div class="kpi-card">
+
+                        <div class="kpi-top">
+
+                            <div class="kpi-label">
+                                Report Status
+                            </div>
+
+                            <div class="kpi-icon icon-green">
+                                ✓
+                            </div>
+
+                        </div>
+
+                        <div class="kpi-value" style="font-size:24px;">
+
+                            {% if products or orders %}
+                                Ready
+                            {% else %}
+                                Empty
+                            {% endif %}
+
+                        </div>
+
+                        <div class="kpi-note">
+
+                            {% if products or orders %}
+                                Latest report loaded
+                            {% else %}
+                                No business records
+                            {% endif %}
+
+                        </div>
+
+                    </div>
+
+
+                </div>
+
+
+                <!-- =========================
+                     SUMMARY GRID
+                     ========================= -->
+
+                <div class="dashboard-grid">
+
+
+                    <!-- ORDER STATUS -->
+
+                    <section class="panel" id="orders">
+
+                        <div class="panel-header">
+
+                            <div>
+
+                                <div class="panel-title">
+                                    Order Status
+                                </div>
+
+                                <div class="panel-description">
+                                    Distribution of orders in the latest report
+                                </div>
+
+                            </div>
+
+                        </div>
+
+
+                        {% set total_orders = orders|length %}
+
+
+                        <div class="status-list">
+
+
+                            {% for status in [
+                                "COMPLETED",
+                                "PENDING",
+                                "PROCESSING",
+                                "FAILED"
+                            ] %}
+
+                                {% set count =
+                                    order_status_counts.get(status, 0)
+                                %}
+
+                                {% if total_orders > 0 %}
+
+                                    {% set percentage =
+                                        ((count / total_orders) * 100)
+                                        |round(0)
+                                    %}
+
+                                {% else %}
+
+                                    {% set percentage = 0 %}
+
+                                {% endif %}
+
+
+                                <div class="status-item">
+
+                                    <div class="status-item-top">
+
+                                        <div class="status-name">
+                                            {{ status }}
+                                        </div>
+
+                                        <div>
+
+                                            {% if status == "COMPLETED" %}
+
+                                                <span class="badge badge-success">
+                                                    <span class="badge-dot"></span>
+                                                    Healthy
+                                                </span>
+
+                                            {% elif status == "FAILED" %}
+
+                                                <span class="badge badge-danger">
+                                                    <span class="badge-dot"></span>
+                                                    Attention
+                                                </span>
+
+                                            {% elif status in ["PENDING", "PROCESSING"] %}
+
+                                                <span class="badge badge-warning">
+                                                    <span class="badge-dot"></span>
+                                                    Active
+                                                </span>
+
+                                            {% else %}
+
+                                                <span class="badge badge-neutral">
+                                                    <span class="badge-dot"></span>
+                                                    Other
+                                                </span>
+
+                                            {% endif %}
+
+                                        </div>
+
+                                    </div>
+
+
+                                    <div class="status-count">
+                                        {{ count }}
+                                    </div>
+
+
+                                    <div class="status-bar">
+
+                                        <div
+                                            class="status-bar-fill
+                                            {% if status == 'COMPLETED' %}
+                                                bar-success
+                                            {% elif status == 'FAILED' %}
+                                                bar-danger
+                                            {% elif status in ['PENDING', 'PROCESSING'] %}
+                                                bar-warning
+                                            {% else %}
+                                                bar-neutral
+                                            {% endif %}"
+                                            data-width="{{ percentage }}"
+                                        ></div>
+
+                                    </div>
+
+
+                                    <div
+                                        style="
+                                            margin-top:6px;
+                                            font-size:10px;
+                                            color:#94a3b8;
+                                        "
+                                    >
+                                        {{ percentage }}% of order items
+                                    </div>
+
+                                </div>
+
+                            {% endfor %}
+
+
+                        </div>
+
+                    </section>
+
+
+                    <!-- REPORT SUMMARY -->
+
+                    <section class="panel">
+
+                        <div class="panel-header">
+
+                            <div>
+
+                                <div class="panel-title">
+                                    Latest Report
+                                </div>
+
+                                <div class="panel-description">
+                                    Report metadata and generation details
+                                </div>
+
+                            </div>
+
+                            <span class="badge badge-success">
+                                <span class="badge-dot"></span>
+                                Available
+                            </span>
+
+                        </div>
+
+
+                        <div class="report-summary">
+
+
+                            <div class="summary-row">
+
+                                <div class="summary-label">
+                                    Report Date
+                                </div>
+
+                                <div class="summary-value">
+                                    {{ report_date or "N/A" }}
+                                </div>
+
+                            </div>
+
+
+                            <div class="summary-row">
+
+                                <div class="summary-label">
+                                    Report Window
+                                </div>
+
+                                <div class="summary-value">
+                                    {{ report_window or "N/A" }}
+                                </div>
+
+                            </div>
+
+
+                            <div class="summary-row">
+
+                                <div class="summary-label">
+                                    Environment
+                                </div>
+
+                                <div class="summary-value">
+                                    {{ environment or "Unknown" }}
+                                </div>
+
+                            </div>
+
+
+                            <div class="summary-row">
+
+                                <div class="summary-label">
+                                    Report File
+                                </div>
+
+                                <div class="summary-value">
+                                    {{ report_key }}
+                                </div>
+
+                            </div>
+
+
+                        </div>
+
+                    </section>
+
+
+                </div>
+
+
+                <!-- =========================
+                     INVENTORY
+                     ========================= -->
+
+                <section class="section" id="inventory">
+
+                    <div class="panel-header">
+
+                        <div>
+
+                            <div class="panel-title">
+                                Inventory Health
+                            </div>
+
+                            <div class="panel-description">
+                                Current product stock and availability
+                            </div>
+
+                        </div>
+
+
+                        <div class="toolbar">
+
+                            <div class="search-box">
+
+                                <span class="search-icon">
+                                    ⌕
+                                </span>
+
+                                <input
+                                    type="text"
+                                    id="productSearch"
+                                    placeholder="Search products..."
+                                    onkeyup="filterProducts()"
+                                >
+
+                            </div>
+
+
+                            <select
+                                id="stockFilter"
+                                class="filter-select"
+                                onchange="filterProducts()"
+                            >
+
+                                <option value="all">
+                                    All Stock
+                                </option>
+
+                                <option value="low">
+                                    Low Stock
+                                </option>
+
+                                <option value="normal">
+                                    Normal Stock
+                                </option>
+
+                            </select>
+
+                        </div>
+
+                    </div>
+
+
+                    {% if products %}
+
+
+                        <div class="table-wrapper">
+
+                            <table>
+
+                                <thead>
+
+                                    <tr>
+
+                                        <th>
+                                            Product
+                                        </th>
+
+                                        <th>
+                                            Price
+                                        </th>
+
+                                        <th>
+                                            Current Stock
+                                        </th>
+
+                                        <th>
+                                            Product Status
+                                        </th>
+
+                                        <th>
+                                            Stock Health
+                                        </th>
+
+                                    </tr>
+
+                                </thead>
+
+
+                                <tbody id="productTable">
+
+
+                                {% for product in products %}
+
+
+                                    <tr
+                                        class="product-row"
+                                        data-name="{{ product['Product Name']|lower }}"
+                                        data-stock="{% if product['Low Stock'].upper() == 'YES' %}low{% else %}normal{% endif %}"
+                                    >
+
+
+                                        <td>
+
+                                            <div class="product-name">
+                                                {{ product["Product Name"] }}
+                                            </div>
+
+                                            <div
+                                                class="product-id"
+                                                style="
+                                                    font-size:10px;
+                                                    margin-top:4px;
+                                                "
+                                            >
+                                                ID #{{ product["Product ID"] }}
+                                            </div>
+
+                                        </td>
+
+
+                                        <td class="price">
+                                            {{ product["Price"] }}
+                                        </td>
+
+
+                                        <td class="stock-cell">
+
+                                            <span class="stock-number">
+                                                {{ product["Current Stock"] }}
+                                            </span>
+
+
+                                            {% set stock =
+                                                product["Current Stock"]|int
+                                            %}
+
+                                            {% set stock_width =
+                                                [stock * 5, 100]|min
+                                            %}
+
+
+                                            <div class="stock-progress">
+
+                                                <div
+                                                    class="
+                                                        stock-progress-fill
+                                                        {% if product['Low Stock'].upper() == 'YES' %}
+                                                            low
+                                                        {% endif %}
+                                                    "
+                                                    data-width="{{ stock_width }}"
+                                                ></div>
+
+                                            </div>
+
+                                        </td>
+
+
+                                        <td>
+
+                                            {% if product["Product Status"].upper() == "ACTIVE" %}
+
+                                                <span class="badge badge-success">
+
+                                                    <span class="badge-dot"></span>
+
+                                                    ACTIVE
+
+                                                </span>
+
+                                            {% else %}
+
+                                                <span class="badge badge-neutral">
+
+                                                    <span class="badge-dot"></span>
+
+                                                    {{ product["Product Status"] }}
+
+                                                </span>
+
+                                            {% endif %}
+
+                                        </td>
+
+
+                                        <td>
+
+                                            {% if product["Low Stock"].upper() == "YES" %}
+
+                                                <span class="badge badge-warning">
+
+                                                    <span class="badge-dot"></span>
+
+                                                    LOW STOCK
+
+                                                </span>
+
+                                            {% else %}
+
+                                                <span class="badge badge-success">
+
+                                                    <span class="badge-dot"></span>
+
+                                                    NORMAL
+
+                                                </span>
+
+                                            {% endif %}
+
+                                        </td>
+
+
+                                    </tr>
+
+
+                                {% endfor %}
+
+
+                                </tbody>
+
+                            </table>
+
+                        </div>
+
+
+                        <div
+                            id="noProductsFound"
+                            class="empty"
+                            style="display:none; margin-top:12px;"
+                        >
+
+                            <div class="empty-icon">
+                                ⌕
+                            </div>
+
+                            No products match your search or filter.
+
+                        </div>
+
+
+                    {% else %}
+
+
+                        <div class="empty">
+
+                            <div class="empty-icon">
+                                ▤
+                            </div>
+
+                            No products were present in the latest report.
+
+                        </div>
+
+
+                    {% endif %}
+
+                </section>
+
+
+                <!-- =========================
+                     ORDER DETAILS
+                     ========================= -->
+
+                <section class="section">
+
+                    <div class="panel-header">
+
+                        <div>
+
+                            <div class="panel-title">
+                                Recent Order Items
+                            </div>
+
+                            <div class="panel-description">
+                                Detailed order and product information
+                            </div>
+
+                        </div>
+
+
+                        {% if orders %}
+
+                            <button
+                                class="button button-primary"
+                                onclick="openOrdersModal()"
+                            >
+                                ⊞ Detailed View
+                            </button>
+
+                        {% endif %}
+
+                    </div>
+
+
+                    {% if orders %}
+
+
+                        <div class="table-wrapper">
+
+                            <table>
+
+                                <thead>
+
+                                    <tr>
+
+                                        <th>
+                                            Order
+                                        </th>
+
+                                        <th>
+                                            Customer
+                                        </th>
+
+                                        <th>
+                                            Created
+                                        </th>
+
+                                        <th>
+                                            Status
+                                        </th>
+
+                                        <th>
+                                            Total
+                                        </th>
+
+                                        <th>
+                                            Product
+                                        </th>
+
+                                        <th>
+                                            Quantity
+                                        </th>
+
+                                        <th>
+                                            Subtotal
+                                        </th>
+
+                                    </tr>
+
+                                </thead>
+
+
+                                <tbody>
+
+
+                                {% for order in orders %}
+
+
+                                    <tr>
+
+
+                                        <td>
+
+                                            <div class="order-id">
+                                                #{{ order["Order ID"] }}
+                                            </div>
+
+                                        </td>
+
+
+                                        <td>
+                                            {{ order["Customer ID"] }}
+                                        </td>
+
+
+                                        <td>
+                                            {{ order["Created Time"] }}
+                                        </td>
+
+
+                                        <td>
+
+
+                                            {% if order["Order Status"].upper() == "COMPLETED" %}
+
+                                                <span class="badge badge-success">
+                                                    <span class="badge-dot"></span>
+                                                    COMPLETED
+                                                </span>
+
+
+                                            {% elif order["Order Status"].upper() == "FAILED" %}
+
+                                                <span class="badge badge-danger">
+                                                    <span class="badge-dot"></span>
+                                                    FAILED
+                                                </span>
+
+
+                                            {% elif order["Order Status"].upper() in ["PENDING", "PROCESSING"] %}
+
+                                                <span class="badge badge-warning">
+                                                    <span class="badge-dot"></span>
+                                                    {{ order["Order Status"] }}
+                                                </span>
+
+
+                                            {% else %}
+
+                                                <span class="badge badge-neutral">
+                                                    <span class="badge-dot"></span>
+                                                    {{ order["Order Status"] }}
+                                                </span>
+
+                                            {% endif %}
+
+
+                                        </td>
+
+
+                                        <td class="price">
+                                            {{ order["Total Amount"] }}
+                                        </td>
+
+
+                                        <td>
+                                            {{ order["Product Name"] }}
+                                        </td>
+
+
+                                        <td>
+                                            {{ order["Quantity"] }}
+                                        </td>
+
+
+                                        <td class="price">
+                                            {{ order["Subtotal"] }}
+                                        </td>
+
+
+                                    </tr>
+
+
+                                {% endfor %}
+
+
+                                </tbody>
+
+                            </table>
+
+                        </div>
+
+
+                    {% else %}
+
+
+                        <div class="empty">
+
+                            <div class="empty-icon">
+                                ▣
+                            </div>
+
+                            No order items were present in the latest report.
+
+                        </div>
+
+
+                    {% endif %}
+
+
+                </section>
+
+
+                <!-- =========================
+                     PREVIOUS REPORTS
+                     ========================= -->
+
+                <section class="section" id="reports">
+
+                    <div class="panel-header">
+
+                        <div>
+
+                            <div class="panel-title">
+                                Report Archive
+                            </div>
+
+                            <div class="panel-description">
+                                Daily reports currently available in Amazon S3
+                            </div>
+
+                        </div>
+
+
+                        {% if previous_reports %}
+
+                            <span class="badge badge-neutral">
+
+                                {{ previous_reports|length }}
+                                reports
+
+                            </span>
+
+                        {% endif %}
+
+                    </div>
+
+
+                    {% if previous_reports %}
+
+
+                        <div class="reports-list">
+
+
+                        {% for report in previous_reports %}
+
+
+                            <div class="previous-report">
+
+
+                                <div class="report-file">
+
+                                    <div class="file-icon">
+                                        CSV
+                                    </div>
+
+
+                                    <div>
+
+                                        <div class="previous-report-name">
+                                            {{ report["name"] }}
+                                        </div>
+
+                                        <div class="previous-report-date">
+                                            Uploaded:
+                                            {{ report["last_modified"] }}
+                                        </div>
+
+                                    </div>
+
+                                </div>
+
+
+                                <div class="previous-report-actions">
+
+
+                                    <button
+                                        class="button button-secondary button-small"
+                                        data-report-url="{{ url_for(
+                                            'view_previous_report',
+                                            report_key=report['key']
+                                        ) }}"
+                                        data-report-name="{{ report['name']|e }}"
+                                        onclick="openPreviousReport(
+                                            this.dataset.reportUrl,
+                                            this.dataset.reportName
+                                        )"
+                                    >
+                                        View
+                                    </button>
+
+
+                                    <a
+                                        class="button button-primary button-small"
+                                        href="{{ url_for(
+                                            'download_previous_report',
+                                            report_key=report['key']
+                                        ) }}"
+                                        onclick="showToast('Report download started')"
+                                    >
+                                        Download
+                                    </a>
+
+
+                                </div>
+
+
+                            </div>
+
+
+                        {% endfor %}
+
+
+                        </div>
+
+
+                    {% else %}
+
+
+                        <div class="empty">
+
+                            <div class="empty-icon">
+                                ◫
+                            </div>
+
+                            No previous reports found.
+
+                        </div>
+
+
+                    {% endif %}
+
+                </section>
+
+
+                <div class="footer">
+
+                    CloudMart Operations Dashboard
+                    ·
+                    Environment: {{ environment or "Unknown" }}
+                    ·
+                    Reports stored in Amazon S3
+
+                </div>
+
+
+            {% endif %}
+
+        </div>
+
+    </main>
+
+</div>
+
+
+<!-- =========================
+     REPORT MODAL
+     ========================= -->
+
+<div
+    id="reportModal"
+    class="modal"
+    onclick="closeModalFromBackground(event)"
+>
+
+    <div class="modal-content">
+
+        <div class="modal-header">
+
+            <div>
+
+                <div
+                    id="reportModalTitle"
+                    class="modal-title"
+                >
+                    Latest Daily Report
+                </div>
+
+                <div class="modal-subtitle">
+                    CSV report preview
+                </div>
+
+            </div>
+
+
+            <button
+                class="close"
+                onclick="closeReportModal()"
+                aria-label="Close"
+            >
+                ×
+            </button>
+
+        </div>
+
+
+        <div class="modal-body">
+
+            <div
+                id="reportLoading"
+                class="empty"
+            >
+                Loading report...
+            </div>
+
+
+            <pre
+                id="reportContent"
+                class="csv-preview"
+                style="display:none;"
+            ></pre>
+
+        </div>
+
+    </div>
+
+</div>
+
+
+<!-- =========================
+     ORDERS MODAL
+     ========================= -->
+
+{% if not error and orders %}
+
+<div
+    id="ordersModal"
+    class="modal"
+    onclick="closeOrdersFromBackground(event)"
+>
+
+    <div class="modal-content">
+
+        <div class="modal-header">
+
+            <div>
+
+                <div class="modal-title">
+                    Detailed Order Information
+                </div>
+
+                <div class="modal-subtitle">
+                    Complete order-item records from the latest report
+                </div>
+
+            </div>
+
+
+            <button
+                class="close"
+                onclick="closeOrdersModal()"
+                aria-label="Close"
+            >
+                ×
+            </button>
+
+        </div>
+
+
+        <div class="modal-body">
+
+            <div class="table-wrapper">
+
+                <table>
+
+                    <thead>
+
+                        <tr>
+
+                            {% for column in order_columns %}
+
+                                <th>
+                                    {{ column }}
+                                </th>
+
+                            {% endfor %}
+
+                        </tr>
+
+                    </thead>
+
+
+                    <tbody>
+
+
+                    {% for order in orders %}
+
+
+                        <tr>
+
+
+                            {% for column in order_columns %}
+
+                                <td>
+                                    {{ order[column] }}
+                                </td>
+
+                            {% endfor %}
+
+
+                        </tr>
+
+
+                    {% endfor %}
+
+
+                    </tbody>
+
+                </table>
+
+            </div>
+
+        </div>
+
+    </div>
+
+</div>
+
+{% endif %}
+
+
+<div id="toast" class="toast"></div>
+
+
+<script>
+
+    /* =========================
+       TOAST
+       ========================= */
+
+    let toastTimer = null;
+
+
+    function showToast(message) {
+
+        const toast = document.getElementById("toast");
+
+        toast.textContent = message;
+
+        toast.classList.add("show");
+
+
+        clearTimeout(toastTimer);
+
+
+        toastTimer = setTimeout(
+            function() {
+                toast.classList.remove("show");
+            },
+            2600
+        );
+
+    }
+
+
+    /* =========================
+       REPORT MODAL
+       ========================= */
+
+    async function openReport(url, title) {
+
+        const modal = document.getElementById("reportModal");
+        const content = document.getElementById("reportContent");
+        const loading = document.getElementById("reportLoading");
+        const titleElement =
+            document.getElementById("reportModalTitle");
+
+
+        titleElement.textContent =
+            title || "Daily Report";
+
+
+        content.style.display = "none";
+        loading.style.display = "block";
+
+        loading.textContent = "Loading report...";
+
+
+        modal.classList.add("open");
+
+        document.body.style.overflow = "hidden";
+
+
+        try {
+
+            const response = await fetch(url);
+
+
+            if (!response.ok) {
+                throw new Error(
+                    "Unable to retrieve report."
+                );
+            }
+
+
+            const text = await response.text();
+
+
+            content.textContent = text;
+
+            loading.style.display = "none";
+
+            content.style.display = "block";
+
+
+        } catch (error) {
+
+            loading.textContent =
+                "Unable to load this report: " + error.message;
+
+        }
+
+    }
+
+
+    function openLatestReport() {
+
+        openReport(
+            "{{ url_for('view_report') }}",
+            "Latest Daily Report"
+        );
+
+    }
+
+
+    function openPreviousReport(url, name) {
+
+        openReport(
+            url,
+            name
+        );
+
+    }
+
+
+    function closeReportModal() {
+
+        document
+            .getElementById("reportModal")
+            .classList.remove("open");
+
+        document.body.style.overflow = "";
+
+    }
+
+
+    function closeModalFromBackground(event) {
+
+        if (
+            event.target ===
+            document.getElementById("reportModal")
+        ) {
+
+            closeReportModal();
+
+        }
+
+    }
+
+
+    /* =========================
+       ORDERS MODAL
+       ========================= */
+
+    function openOrdersModal() {
+
+        const modal =
+            document.getElementById("ordersModal");
+
+        if (!modal) {
+            return;
+        }
+
+        modal.classList.add("open");
+
+        document.body.style.overflow = "hidden";
+
+    }
+
+
+    function closeOrdersModal() {
+
+        const modal =
+            document.getElementById("ordersModal");
+
+        if (!modal) {
+            return;
+        }
+
+        modal.classList.remove("open");
+
+        document.body.style.overflow = "";
+
+    }
+
+
+    function closeOrdersFromBackground(event) {
+
+        if (
+            event.target ===
+            document.getElementById("ordersModal")
+        ) {
+
+            closeOrdersModal();
+
+        }
+
+    }
+
+
+    /* =========================
+       PRODUCT SEARCH / FILTER
+       ========================= */
+
+    function filterProducts() {
+
+        const searchInput =
+            document.getElementById("productSearch");
+
+        const filterInput =
+            document.getElementById("stockFilter");
+
+
+        if (!searchInput || !filterInput) {
+            return;
+        }
+
+
+        const search =
+            searchInput.value
+                .toLowerCase()
+                .trim();
+
+
+        const filter =
+            filterInput.value;
+
+
+        const rows =
+            document.querySelectorAll(".product-row");
+
+
+        let visibleCount = 0;
+
+
+        rows.forEach(
+            function(row) {
+
+                const name =
+                    row.dataset.name || "";
+
+
+                const stock =
+                    row.dataset.stock || "";
+
+
+                const matchesSearch =
+                    name.includes(search);
+
+
+                const matchesFilter =
+                    filter === "all" ||
+                    stock === filter;
+
+
+                if (
+                    matchesSearch &&
+                    matchesFilter
+                ) {
+
+                    row.style.display = "";
+
+                    visibleCount++;
+
+                } else {
+
+                    row.style.display = "none";
+
+                }
+
+            }
+        );
+
+
+        const empty =
+            document.getElementById(
+                "noProductsFound"
+            );
+
+
+        if (empty) {
+
+            empty.style.display =
+                visibleCount === 0
+                    ? "block"
+                    : "none";
+
+        }
+
+    }
+
+
+    /* =========================
+       KEYBOARD CONTROLS
+       ========================= */
+
+    document.addEventListener(
+        "keydown",
+        function(event) {
+
+            if (event.key === "Escape") {
+
+                closeReportModal();
+
+                closeOrdersModal();
+
+            }
+
+        }
+    );
+
+
+    /* =========================
+       NAVIGATION
+       ========================= */
+
+    document.querySelectorAll(".nav-link").forEach(
+        function(link) {
+
+            link.addEventListener(
+                "click",
+                function() {
+
+                    document
+                        .querySelectorAll(".nav-link")
+                        .forEach(
+                            function(item) {
+                                item.classList.remove(
+                                    "active"
+                                );
+                            }
+                        );
+
+
+                    link.classList.add("active");
+
+                }
+            );
+
+        }
+    );
+
+    document.querySelectorAll("[data-width]").forEach(
+        function(element) {
+            element.style.width =
+                element.dataset.width + "%";
+        }
+    );
+
+</script>
+
+<script>
+    const themeToggle = document.getElementById("themeToggle");
+    const themeIcon = document.getElementById("themeIcon");
+    const themeLabel = document.getElementById("themeLabel");
+
+    function applyTheme(theme) {
+        document.documentElement.setAttribute("data-theme", theme);
+
+        if (theme === "dark") {
+            themeIcon.textContent = "☀️";
+            themeLabel.textContent = "Light Mode";
+            themeToggle.title = "Switch to light mode";
+        } else {
+            themeIcon.textContent = "🌙";
+            themeLabel.textContent = "Dark Mode";
+            themeToggle.title = "Switch to dark mode";
+        }
+    }
+
+    const savedTheme = localStorage.getItem("cloudmart-theme") || "light";
+    applyTheme(savedTheme);
+
+    themeToggle.addEventListener("click", function () {
+        const currentTheme =
+            document.documentElement.getAttribute("data-theme");
+
+        const newTheme = currentTheme === "dark" ? "light" : "dark";
+
+        localStorage.setItem("cloudmart-theme", newTheme);
+        applyTheme(newTheme);
+    });
+</script>
+
+</body>
+</html>
