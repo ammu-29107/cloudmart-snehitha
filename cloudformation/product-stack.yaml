@@ -142,8 +142,7 @@ Resources:
                   - lambda:InvokeFunction
                 Resource:
                   - !GetAtt ProductLambda.Arn
-                  - Fn::ImportValue:
-                      !Sub cloudmart-${Environment}-order-lambda-arn
+                  - !Sub arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:cloudmart-${Environment}-order
                   - !GetAtt CustomerLambda.Arn
 
 
@@ -209,8 +208,7 @@ Resources:
             !Ref ProductLambda
 
           ORDER_FUNCTION_NAME:
-            Fn::ImportValue:
-              !Sub cloudmart-${Environment}-order-lambda-name
+            !Sub cloudmart-${Environment}-order
 
           CUSTOMER_FUNCTION_NAME:
             !Ref CustomerLambda
