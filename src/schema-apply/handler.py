@@ -351,10 +351,6 @@ def lambda_handler(event, context):
 
         with conn.cursor() as cur:
 
-            for stmt in MIGRATION_STATEMENTS:
-
-                cur.execute(stmt)
-
             # ====================================================
             # APPLY DATABASE SCHEMA
             # ====================================================
@@ -366,6 +362,15 @@ def lambda_handler(event, context):
                 applied.append(
                     stmt.strip().split("\n")[0]
                 )
+
+            # ====================================================
+            # APPLY DATABASE MIGRATIONS
+            # ====================================================
+
+            for stmt in MIGRATION_STATEMENTS:
+
+                cur.execute(stmt)
+
 
             # ====================================================
             # INSERT SAMPLE DATA
