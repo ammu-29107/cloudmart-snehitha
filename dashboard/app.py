@@ -315,6 +315,9 @@ def get_previous_reports():
             {
                 "key": key,
                 "name": os.path.basename(key),
+                "report_date": item["LastModified"].strftime(
+                    "%Y-%m-%d"
+                ),
                 "last_modified": item["LastModified"].strftime(
                     "%Y-%m-%d %H:%M:%S"
                 )

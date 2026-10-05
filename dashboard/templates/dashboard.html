@@ -9,7 +9,7 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='dashboard.css') }}">
 </head>
 
-<body class="login-page">
+<body class="dashboard-page">
 
 <div class="app">
 
@@ -154,6 +154,12 @@
 
 
             <div class="topbar-right">
+
+                <div class="environment">
+                    <span class="environment-dot"></span>
+                    {{ environment or "Unknown" }}
+                </div>
+
                 <button
                     type="button"
                     class="theme-toggle"
@@ -165,10 +171,6 @@
                     <span id="themeLabel">Dark Mode</span>
                 </button>
 
-                <div class="environment">
-                    <span class="environment-dot"></span>
-                    {{ environment or "Unknown" }}
-                </div>
             </div>
 
         </header>
@@ -414,12 +416,7 @@
                         <div class="status-list">
 
 
-                            {% for status in [
-                                "COMPLETED",
-                                "PENDING",
-                                "PROCESSING",
-                                "FAILED"
-                            ] %}
+                            {% for status in order_status_counts.keys()|sort %}
 
                                 {% set count =
                                     order_status_counts.get(status, 0)
@@ -453,28 +450,35 @@
 
                                                 <span class="badge badge-success">
                                                     <span class="badge-dot"></span>
-                                                    Healthy
+                                                    Completed
                                                 </span>
 
                                             {% elif status == "FAILED" %}
 
                                                 <span class="badge badge-danger">
                                                     <span class="badge-dot"></span>
-                                                    Attention
+                                                    Failed
                                                 </span>
 
                                             {% elif status in ["PENDING", "PROCESSING"] %}
 
                                                 <span class="badge badge-warning">
                                                     <span class="badge-dot"></span>
-                                                    Active
+                                                    {{ status|title }}
+                                                </span>
+
+                                            {% elif status == "CANCELLED" %}
+
+                                                <span class="badge badge-neutral">
+                                                    <span class="badge-dot"></span>
+                                                    Cancelled
                                                 </span>
 
                                             {% else %}
 
                                                 <span class="badge badge-neutral">
                                                     <span class="badge-dot"></span>
-                                                    Other
+                                                    {{ status|title }}
                                                 </span>
 
                                             {% endif %}
@@ -1101,26 +1105,50 @@
                     <div class="panel-header">
 
                         <div>
-
                             <div class="panel-title">
                                 Report Archive
                             </div>
 
                             <div class="panel-description">
-                                Daily reports currently available in Amazon S3
+                                Previous generated reports
                             </div>
-
                         </div>
-
 
                         {% if previous_reports %}
 
-                            <span class="badge badge-neutral">
+                            <div class="reports-toolbar">
 
-                                {{ previous_reports|length }}
-                                reports
+                                <div class="search-box">
 
-                            </span>
+                                    <span class="search-icon">
+                                        ⌕
+                                    </span>
+
+                                    <input
+                                        type="text"
+                                        id="reportSearch"
+                                        placeholder="Search reports..."
+                                        onkeyup="filterReports()"
+                                    >
+
+                                </div>
+
+                                <input
+                                    type="date"
+                                    id="reportDateFilter"
+                                    class="filter-select"
+                                    onchange="filterReports()"
+                                >
+
+                                <button
+                                    type="button"
+                                    class="button button-secondary button-small"
+                                    onclick="clearReportFilters()"
+                                >
+                                    Clear
+                                </button>
+
+                            </div>
 
                         {% endif %}
 
@@ -1136,7 +1164,10 @@
                         {% for report in previous_reports %}
 
 
-                            <div class="previous-report">
+                            <div
+                                class="previous-report"
+                                data-report-date="{{ report['report_date'] }}"
+                            >
 
 
                                 <div class="report-file">
@@ -1149,12 +1180,11 @@
                                     <div>
 
                                         <div class="previous-report-name">
-                                            {{ report["name"] }}
+                                            {{ report["report_date"] }}
                                         </div>
 
                                         <div class="previous-report-date">
-                                            Uploaded:
-                                            {{ report["last_modified"] }}
+                                            Uploaded {{ report["last_modified"] }}
                                         </div>
 
                                     </div>
@@ -1202,6 +1232,18 @@
                         {% endfor %}
 
 
+                        </div>
+
+                        <div
+                            id="noReportsFound"
+                            class="empty"
+                            style="display:none; margin-top:12px;"
+                        >
+                            <div class="empty-icon">
+                                ⌕
+                            </div>
+
+                            No reports match your search or selected date.
                         </div>
 
 
@@ -1687,6 +1729,107 @@
                     : "none";
 
         }
+
+    }
+
+    /* =========================
+        REPORT SEARCH / FILTER
+        ========================= */
+
+    function filterReports() {
+
+        const searchInput =
+            document.getElementById("reportSearch");
+
+        const dateInput =
+            document.getElementById("reportDateFilter");
+
+        if (!searchInput || !dateInput) {
+            return;
+        }
+
+        const search =
+            searchInput.value
+                .toLowerCase()
+                .trim();
+
+        const selectedDate =
+            dateInput.value;
+
+        const reports =
+            document.querySelectorAll(".previous-report");
+
+        let visibleCount = 0;
+
+        reports.forEach(
+            function(report) {
+
+                const name =
+                    report
+                        .querySelector(".previous-report-name")
+                        ?.textContent
+                        .toLowerCase()
+                        .trim() || "";
+
+                const reportDate =
+                    report.dataset.reportDate || "";
+
+                const matchesSearch =
+                    name.includes(search);
+
+                const matchesDate =
+                    !selectedDate ||
+                    reportDate === selectedDate;
+
+                if (
+                    matchesSearch &&
+                    matchesDate
+                ) {
+
+                    report.style.display = "";
+
+                    visibleCount++;
+
+                } else {
+
+                    report.style.display = "none";
+
+                }
+
+            }
+        );
+
+        const empty =
+            document.getElementById("noReportsFound");
+
+        if (empty) {
+
+            empty.style.display =
+                visibleCount === 0
+                    ? "block"
+                    : "none";
+
+        }
+    }
+
+
+    function clearReportFilters() {
+
+        const searchInput =
+            document.getElementById("reportSearch");
+
+        const dateInput =
+            document.getElementById("reportDateFilter");
+
+        if (searchInput) {
+            searchInput.value = "";
+        }
+
+        if (dateInput) {
+            dateInput.value = "";
+        }
+
+        filterReports();
 
     }
 

@@ -51,7 +51,7 @@
             font-size: 14px;
         }
 
-        button {
+        .login-page button {
             width: 100%;
             margin-top: 22px;
             padding: 12px;
@@ -356,7 +356,24 @@
         .topbar-right {
             display: flex;
             align-items: center;
-            gap: 12px;
+            justify-content: flex-end;
+            gap: 10px;
+            flex-wrap: nowrap;
+            margin-left: auto;
+            flex-shrink: 0;
+        }
+
+        .environment,
+        .theme-toggle {
+            height: 36px;
+            min-height: 36px;
+            padding: 0 13px;
+            margin: 0;
+            box-sizing: border-box;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 999px;
         }
 
         .environment {
@@ -366,7 +383,6 @@
             background: #ecfdf5;
             color: #047857;
             border: 1px solid #bbf7d0;
-            padding: 8px 13px;
             border-radius: 999px;
             font-size: 12px;
             font-weight: 700;
@@ -451,8 +467,16 @@
 
         .hero-actions {
             display: flex;
-            gap: 9px;
+            align-items: center;
+            justify-content: flex-end;
+            gap: 10px;
             flex-wrap: wrap;
+        }
+
+        .hero-actions .button {
+            width: auto;
+            margin-top: 0;
+            flex: 0 0 auto;
         }
 
         /* =========================
@@ -460,6 +484,8 @@
            ========================= */
 
         .button {
+            width: auto;
+            margin-top: 0;
             border: none;
             border-radius: 10px;
             padding: 10px 15px;
@@ -541,7 +567,7 @@
             display: inline-flex;
             align-items: center;
             gap: 7px;
-            padding: 8px 12px;
+            padding: 0 13px;
             border: 1px solid var(--border);
             border-radius: 999px;
             background: var(--surface);
@@ -909,6 +935,40 @@
             flex-wrap: wrap;
         }
 
+        .reports-toolbar {
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            gap: 10px;
+            flex-wrap: nowrap;
+            margin-left: auto;
+        }
+
+        .reports-toolbar .search-box {
+            width: 220px;
+            min-width: 220px;
+        }
+
+        .reports-toolbar .filter-select {
+            width: 150px;
+            min-width: 150px;
+            height: 36px;
+            margin: 0;
+            box-sizing: border-box;
+        }
+
+        .reports-toolbar .button {
+            height: 36px;
+            min-height: 36px;
+            margin: 0;
+            padding: 0 14px;
+            box-sizing: border-box;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            white-space: nowrap;
+        }
+
         .search-box {
             position: relative;
         }
@@ -1137,6 +1197,12 @@
             word-break: break-word;
         }
 
+        .previous-report-meta {
+            margin-top: 3px;
+            font-size: 11px;
+            color: var(--muted);
+        }
+
         .previous-report-date {
             font-size: 10px;
             color: #94a3b8;
@@ -1225,6 +1291,8 @@
         .close {
             width: 32px;
             height: 32px;
+            margin-top: 0;
+            padding: 0;
             border: none;
             background: #f1f5f9;
             color: #64748b;
@@ -1448,8 +1516,8 @@
             }
 
             .environment {
-                padding: 7px 10px;
-                font-size: 10px;
+                padding: 0 13px;
+                font-size: 11px;
             }
 
             .container {
