@@ -1,4 +1,4 @@
-name: CloudMart Deploy - Network, Database, Storage, Eventbus, Product, Order
+name: CloudMart Deploy - All Stacks
 
 
 on:
