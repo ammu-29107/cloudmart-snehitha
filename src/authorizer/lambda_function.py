@@ -169,11 +169,25 @@ def is_customer_path(path):
         or path.startswith("/customers/")
     )
 
+def is_public_product_read(method, path):
+
+    return (
+        method == "GET"
+        and (
+            path == "/products"
+            or path.startswith("/products/")
+        )
+    )
+
 def is_allowed(role, method, path):
 
     if is_product_path(path):
 
         permissions = {
+            "PUBLIC": {
+                "GET"
+            },
+
             "CUSTOMER": {
                 "GET"
             },
@@ -419,9 +433,14 @@ def lambda_handler(event, context):
                 supplied_token = authorization_parts[1].strip()
 
         if (
-            method == "POST"
-            and path in ["/customers", "/login"]
-            and not supplied_token
+            not supplied_token
+            and (
+                (
+                    method == "POST"
+                    and path in ["/customers", "/login"]
+                )
+                or is_public_product_read(method, path)
+            )
         ):
 
             role = "PUBLIC"

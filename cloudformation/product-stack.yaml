@@ -577,41 +577,6 @@ Resources:
 
 
   # ==============================================================
-  # PRODUCT LAMBDA FUNCTION URL
-  # ==============================================================
-
-  ProductFunctionUrl:
-    Type: AWS::Lambda::Url
-    Properties:
-
-      TargetFunctionArn:
-        !GetAtt ProductLambda.Arn
-
-      AuthType:
-        NONE
-
-
-  # ==============================================================
-  # PRODUCT FUNCTION URL INVOKE PERMISSION
-  # ==============================================================
-
-  ProductFunctionUrlPermission:
-    Type: AWS::Lambda::Permission
-    Properties:
-
-      FunctionName:
-        !Ref ProductLambda
-
-      Action:
-        lambda:InvokeFunctionUrl
-
-      Principal: '*'
-
-      FunctionUrlAuthType:
-        NONE
-
-
-  # ==============================================================
   # AUTHORIZE INTERNAL INVOCATION OF PRODUCT LAMBDA
   # ==============================================================
 
@@ -809,12 +774,6 @@ Outputs:
     Description: Product Lambda ARN
     Value:
       !GetAtt ProductLambda.Arn
-
-
-  ProductFunctionUrl:
-    Description: Product Lambda Function URL
-    Value:
-      !GetAtt ProductFunctionUrl.FunctionUrl
 
 
   AuthorizerFunctionUrl:
