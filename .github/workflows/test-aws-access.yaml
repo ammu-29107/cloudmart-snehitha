@@ -13,10 +13,16 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Read AWS region
+        id: config
+        shell: bash
+        run: |
+          echo "aws_region=$(jq -r '.[] | select(.ParameterKey=="AWSRegion") | .ParameterValue' cloudmart-config.json)" >> "$GITHUB_OUTPUT"
       
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: ap-south-1
+          aws-region: ${{ steps.config.outputs.aws_region }}
           
       - run: aws sts get-caller-identity
