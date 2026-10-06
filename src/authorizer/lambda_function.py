@@ -28,11 +28,7 @@ DB_NAME_PARAM = os.environ["DB_NAME_PARAM"]
 DB_USER_PARAM = os.environ["DB_USER_PARAM"]
 DB_PASSWORD_PARAM = os.environ["DB_PASSWORD_PARAM"]
 
-ENVIRONMENT = os.environ.get(
-    "ENVIRONMENT",
-    "dev"
-)
-
+ENVIRONMENT = os.environ["ENVIRONMENT"]
 
 def response(status_code, body):
 

@@ -27,10 +27,7 @@ s3 = boto3.client("s3")
 
 ssm = boto3.client("ssm")
 
-ENVIRONMENT = os.environ.get(
-    "ENVIRONMENT",
-    "dev"
-)
+ENVIRONMENT = os.environ["ENVIRONMENT"]
 
 ADMIN_TOKEN_PARAMETER = os.environ.get(
     "ADMIN_TOKEN_PARAMETER",
