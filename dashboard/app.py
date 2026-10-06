@@ -542,8 +542,19 @@ def logout():
 @app.route("/")
 def dashboard():
     try:
-        report_data = load_report()
         live_data = load_live_dashboard_data()
+
+        report_data = {
+            "report_date": None,
+            "report_window": None,
+            "report_key": None,
+            "previous_reports": [],
+        }
+
+        try:
+            report_data = load_report()
+        except Exception:
+            pass
 
         report_data.update(live_data)
 
