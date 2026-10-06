@@ -72,11 +72,42 @@ jobs:
         id: config
         shell: bash
         run: |
-          echo "aws_region=$(jq -r '.[] | select(.ParameterKey=="AWSRegion") | .ParameterValue' cloudmart-config.json)" >> "$GITHUB_OUTPUT"
-          echo "environment=$(jq -r '.[] | select(.ParameterKey=="Environment") | .ParameterValue' cloudmart-config.json)" >> "$GITHUB_OUTPUT"
-          echo "db_instance_class=$(jq -r '.[] | select(.ParameterKey=="DbInstanceClass") | .ParameterValue' cloudmart-config.json)" >> "$GITHUB_OUTPUT"
-          echo "low_stock_threshold=$(jq -r '.[] | select(.ParameterKey=="LowStockThreshold") | .ParameterValue' cloudmart-config.json)" >> "$GITHUB_OUTPUT"
-          echo "s3_prefix_list_id=$(jq -r '.[] | select(.ParameterKey=="S3PrefixListId") | .ParameterValue' cloudmart-config.json)" >> "$GITHUB_OUTPUT"
+          aws_region=$(jq -r '.[] | select(.ParameterKey=="AWSRegion") | .ParameterValue' cloudmart-config.json)
+          environment=$(jq -r '.[] | select(.ParameterKey=="Environment") | .ParameterValue' cloudmart-config.json)
+          db_instance_class=$(jq -r '.[] | select(.ParameterKey=="DbInstanceClass") | .ParameterValue' cloudmart-config.json)
+          low_stock_threshold=$(jq -r '.[] | select(.ParameterKey=="LowStockThreshold") | .ParameterValue' cloudmart-config.json)
+          s3_prefix_list_id=$(jq -r '.[] | select(.ParameterKey=="S3PrefixListId") | .ParameterValue' cloudmart-config.json)
+
+          # Validate required CloudMart configuration values
+          for value in \
+            "$aws_region" \
+            "$environment" \
+            "$db_instance_class" \
+            "$low_stock_threshold" \
+            "$s3_prefix_list_id";
+          do
+            if [ -z "$value" ] || [ "$value" = "null" ]; then
+              echo "ERROR: Required CloudMart configuration value is empty or null."
+              exit 1
+            fi
+          done
+
+          if ! [[ "$low_stock_threshold" =~ ^[0-9]+$ ]]; then
+            echo "ERROR: LowStockThreshold must be a positive integer."
+            exit 1
+          fi
+
+          if ! [[ "$s3_prefix_list_id" =~ ^pl-[a-z0-9]+$ ]]; then
+            echo "ERROR: S3PrefixListId must be a valid AWS prefix-list ID."
+            exit 1
+          fi
+
+          echo "aws_region=$aws_region" >> "$GITHUB_OUTPUT"
+          echo "environment=$environment" >> "$GITHUB_OUTPUT"
+          echo "db_instance_class=$db_instance_class" >> "$GITHUB_OUTPUT"
+          echo "low_stock_threshold=$low_stock_threshold" >> "$GITHUB_OUTPUT"
+          echo "s3_prefix_list_id=$s3_prefix_list_id" >> "$GITHUB_OUTPUT"
+
 
       - uses: aws-actions/configure-aws-credentials@v4
 
