@@ -265,8 +265,7 @@ def get_admin_token():
 
 
 REPORT_BUCKET = os.environ.get(
-    "REPORT_BUCKET",
-    "cloudmart-dev-reports-790574019399"
+    "REPORT_BUCKET"
 )
 
 REPORT_PREFIX = os.environ.get(
@@ -572,6 +571,7 @@ def dashboard():
             "dashboard.html",
             error=None,
             environment=ENVIRONMENT,
+            aws_region=os.environ.get("AWS_DEFAULT_REGION"),
             **report_data
         )
 
