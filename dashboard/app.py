@@ -209,6 +209,14 @@ def load_live_dashboard_data():
         if product["stock_quantity"] <= threshold
     )
 
+    total_orders = sum(order_status_counts.values())
+
+    pending_processing_orders = sum(
+        count
+        for status, count in order_status_counts.items()
+        if status in {"PENDING", "PROCESSING"}
+    )
+
     return {
         "products": [
             {
@@ -243,7 +251,9 @@ def load_live_dashboard_data():
             for order in orders
         ],
         "order_status_counts": order_status_counts,
-        "low_stock_count": low_stock_count
+        "low_stock_count": low_stock_count,
+        "total_orders": total_orders,
+        "pending_processing_orders": pending_processing_orders,
     }
 
 def get_admin_token():
@@ -561,6 +571,7 @@ def dashboard():
         return render_template(
             "dashboard.html",
             error=None,
+            environment=ENVIRONMENT,
             **report_data
         )
 

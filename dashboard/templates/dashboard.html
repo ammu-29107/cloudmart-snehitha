@@ -88,7 +88,12 @@
 
         <nav class="nav">
 
-            <a class="nav-link" href="#overview">
+            <a
+                class="nav-link"
+                href="https://ap-south-1.console.aws.amazon.com/cloudwatch/home?region=ap-south-1#dashboards:name=cloudmart-dev-operations"
+                target="_blank"
+                rel="noopener noreferrer"
+            >
 
                 <span class="nav-icon">◉</span>
                 <span>System Status</span>
@@ -107,25 +112,6 @@
             </a>
 
         </nav>
-
-
-        <div class="sidebar-bottom">
-
-            <div class="system-status">
-
-                <div class="system-status-title">
-                    CloudMart Platform
-                </div>
-
-                <div class="status-online">
-
-                    <span class="online-dot"></span>
-
-                    <span>Dashboard Online</span>
-
-                </div>
-
-            </div>
 
         </div>
 
@@ -295,7 +281,7 @@
                         </div>
 
                         <div class="kpi-note">
-                            Products in latest report
+                            Live products in inventory
                         </div>
 
                     </div>
@@ -306,7 +292,7 @@
                         <div class="kpi-top">
 
                             <div class="kpi-label">
-                                Low Stock
+                                Low Stock Products
                             </div>
 
                             <div class="kpi-icon icon-orange">
@@ -331,7 +317,7 @@
                         <div class="kpi-top">
 
                             <div class="kpi-label">
-                                Order Items
+                                Total Orders
                             </div>
 
                             <div class="kpi-icon icon-purple">
@@ -341,11 +327,11 @@
                         </div>
 
                         <div class="kpi-value">
-                            {{ orders|length }}
+                            {{ total_orders }}
                         </div>
 
                         <div class="kpi-note">
-                            Order item records
+                            Live orders in the system
                         </div>
 
                     </div>
@@ -356,7 +342,7 @@
                         <div class="kpi-top">
 
                             <div class="kpi-label">
-                                Report Status
+                                Pending / Processing
                             </div>
 
                             <div class="kpi-icon icon-green">
@@ -365,31 +351,18 @@
 
                         </div>
 
-                        <div class="kpi-value" style="font-size:24px;">
-
-                            {% if products or orders %}
-                                Ready
-                            {% else %}
-                                Empty
-                            {% endif %}
-
+                        <div class="kpi-value">
+                            {{ pending_processing_orders }}
                         </div>
 
                         <div class="kpi-note">
-
-                            {% if products or orders %}
-                                Latest report loaded
-                            {% else %}
-                                No business records
-                            {% endif %}
-
+                            Orders awaiting completion
                         </div>
 
                     </div>
 
 
                 </div>
-
 
                 <!-- =========================
                      SUMMARY GRID
@@ -411,7 +384,7 @@
                                 </div>
 
                                 <div class="panel-description">
-                                    Distribution of orders in the latest report
+                                    Live distribution of orders by status
                                 </div>
 
                             </div>
@@ -528,7 +501,7 @@
                                             color:#94a3b8;
                                         "
                                     >
-                                        {{ percentage }}% of order items
+                                        {{ percentage }}% of orders
                                     </div>
 
                                 </div>
@@ -554,7 +527,7 @@
                                 </div>
 
                                 <div class="panel-description">
-                                    Report metadata and generation details
+                                    Generated report stored in Amazon S3
                                 </div>
 
                             </div>
@@ -891,7 +864,7 @@
                                 ▤
                             </div>
 
-                            No products were present in the latest report.
+                            No products are currently available in inventory.
 
                         </div>
 
@@ -912,11 +885,11 @@
                         <div>
 
                             <div class="panel-title">
-                                Recent Order Items
+                                Recent Orders
                             </div>
 
                             <div class="panel-description">
-                                Detailed order and product information
+                                Live order and customer information
                             </div>
 
                         </div>
@@ -928,7 +901,7 @@
                                 class="button button-primary"
                                 onclick="openOrdersModal()"
                             >
-                                ⊞ Detailed View
+                                ⊕ Detailed View
                             </button>
 
                         {% endif %}
@@ -1094,7 +1067,7 @@
                                 ▣
                             </div>
 
-                            No order items were present in the latest report.
+                            No orders are currently available.
 
                         </div>
 
@@ -1382,7 +1355,7 @@
                 </div>
 
                 <div class="modal-subtitle">
-                    Complete order-item records from the latest report
+                    Live order and customer details
                 </div>
 
             </div>
