@@ -481,7 +481,7 @@ def load_report():
         "report_key": key,
         "report_date": report_date,
         "report_window": report_window,
-        "environment": environment,
+        "report_environment": environment,
         "orders": orders,
         "products": products,
         "order_columns": order_columns,
