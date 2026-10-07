@@ -182,6 +182,10 @@ Resources:
 
                 Resource: '*'
 
+                Condition:
+                  StringEquals:
+                    cloudwatch:namespace: CloudMart/Operations
+
 
         # --------------------------------------------------------
         # Lambda VPC networking
