@@ -713,6 +713,15 @@ jobs:
           echo "Checking database SSM parameters..."
 
           echo
+          echo "Creating/updating database password SecureString..."
+
+          aws ssm put-parameter \
+            --name "/cloudmart/${{ needs.validate-templates.outputs.environment }}/database/password" \
+            --value "${{ secrets.DB_PASSWORD }}" \
+            --type "SecureString" \
+            --overwrite
+
+          echo
           echo "Database host parameter:"
           aws ssm get-parameter \
             --name "/cloudmart/${{ needs.validate-templates.outputs.environment }}/database/host" \
