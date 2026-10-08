@@ -3737,13 +3737,15 @@ jobs:
       - name: Deploy dashboard to existing EC2
         if: env.ready == 'true'
         run: |
-          INSTANCE_ID=$(aws cloudformation list-stack-resources \
-            --stack-name "$STACK_NAME" \
-            --query "StackResourceSummaries[?LogicalResourceId=='DashboardInstance'].PhysicalResourceId" \
+          INSTANCE_ID=$(aws ec2 describe-instances \
+            --filters \
+              "Name=tag:Name,Values=cloudmart-${{ needs.validate-templates.outputs.environment }}-dashboard" \
+              "Name=instance-state-name,Values=running" \
+            --query 'Reservations[].Instances[].InstanceId' \
             --output text)
 
           if [ -z "$INSTANCE_ID" ] || [ "$INSTANCE_ID" = "None" ]; then
-            echo "ERROR: DashboardInstance was not found in monitoring stack."
+            echo "ERROR: Running dashboard EC2 instance was not found."
             exit 1
           fi
 
