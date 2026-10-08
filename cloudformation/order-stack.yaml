@@ -227,6 +227,23 @@ Resources:
                   - !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:*
 
 
+        # --------------------------------------------------------
+        # CLOUDWATCH BUSINESS METRICS
+        # --------------------------------------------------------
+
+        - PolicyName: OrderCloudWatchMetrics
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - cloudwatch:PutMetricData
+                Resource: "*"
+                Condition:
+                  StringEquals:
+                    cloudwatch:namespace: CloudMart/Operations
+
+
   # ==============================================================
   # ORDER LAMBDA
   # ==============================================================

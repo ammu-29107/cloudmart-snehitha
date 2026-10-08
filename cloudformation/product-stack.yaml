@@ -350,6 +350,23 @@ Resources:
 
 
         # --------------------------------------------------------
+        # CLOUDWATCH BUSINESS METRICS
+        # --------------------------------------------------------
+
+        - PolicyName: ProductCloudWatchMetrics
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - cloudwatch:PutMetricData
+                Resource: "*"
+                Condition:
+                  StringEquals:
+                    cloudwatch:namespace: CloudMart/Operations
+
+
+        # --------------------------------------------------------
         # EVENTBRIDGE
         # --------------------------------------------------------
 
