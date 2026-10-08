@@ -295,6 +295,60 @@ Resources:
       AlarmActions:
         - !Ref OperationsTopic
 
+  AuthorizerLambdaErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'cloudmart-${Environment}-authorizer-errors'
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Sub 'cloudmart-${Environment}-authorizer'
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref OperationsTopic
+
+  CustomerLambdaErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'cloudmart-${Environment}-customer-errors'
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Sub 'cloudmart-${Environment}-customer'
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref OperationsTopic
+
+  ReportLambdaErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'cloudmart-${Environment}-report-errors'
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Sub 'cloudmart-${Environment}-report'
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref OperationsTopic
+
   OrderProcessingLambdaThrottleAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
@@ -347,6 +401,24 @@ Resources:
       Period: 300
       EvaluationPeriods: 1
       Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref OperationsTopic
+
+  OrderQueueOldestMessageAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'cloudmart-${Environment}-order-queue-oldest-message'
+      Namespace: AWS/SQS
+      MetricName: ApproximateAgeOfOldestMessage
+      Dimensions:
+        - Name: QueueName
+          Value: !Sub 'cloudmart-${Environment}-order-queue'
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 300
       ComparisonOperator: GreaterThanThreshold
       TreatMissingData: notBreaching
       AlarmActions:
@@ -413,7 +485,13 @@ Resources:
                   [ "AWS/Lambda", "Invocations", "FunctionName", "cloudmart-${Environment}-order" ],
                   [ ".", "Errors", ".", "cloudmart-${Environment}-order" ],
                   [ "AWS/Lambda", "Invocations", "FunctionName", "cloudmart-${Environment}-order-processing" ],
-                  [ ".", "Errors", ".", "cloudmart-${Environment}-order-processing" ]
+                  [ ".", "Errors", ".", "cloudmart-${Environment}-order-processing" ],
+                  [ "AWS/Lambda", "Invocations", "FunctionName", "cloudmart-${Environment}-authorizer" ],
+                  [ ".", "Errors", ".", "cloudmart-${Environment}-authorizer" ],
+                  [ "AWS/Lambda", "Invocations", "FunctionName", "cloudmart-${Environment}-customer" ],
+                  [ ".", "Errors", ".", "cloudmart-${Environment}-customer" ],
+                  [ "AWS/Lambda", "Invocations", "FunctionName", "cloudmart-${Environment}-report" ],
+                  [ ".", "Errors", ".", "cloudmart-${Environment}-report" ]
                 ]
               }
             },
@@ -431,7 +509,8 @@ Resources:
                 "stat": "Maximum",
                 "metrics": [
                   [ "AWS/SQS", "ApproximateNumberOfMessagesVisible", "QueueName", "cloudmart-${Environment}-order-queue" ],
-                  [ "AWS/SQS", "ApproximateNumberOfMessagesVisible", "QueueName", "cloudmart-${Environment}-order-dlq" ]
+                  [ "AWS/SQS", "ApproximateNumberOfMessagesVisible", "QueueName", "cloudmart-${Environment}-order-dlq" ],
+                  [ "AWS/SQS", "ApproximateAgeOfOldestMessage", "QueueName", "cloudmart-${Environment}-order-queue" ]
                 ]
               }
             },
@@ -473,7 +552,8 @@ Resources:
                   [ ".", "OrderCancelled", ".", "${Environment}" ],
                   [ ".", "LowStockEvents", ".", "${Environment}" ],
                   [ ".", "HTTP4xx", ".", "${Environment}" ],
-                  [ ".", "HTTP5xx", ".", "${Environment}" ]
+                  [ ".", "HTTP5xx", ".", "${Environment}" ],
+                  [ ".", "ReportGenerationSuccess", ".", "${Environment}" ]
                 ]
               }
             },
